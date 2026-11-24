@@ -1,0 +1,246 @@
+import { User, Conversation, Message } from "../types";
+
+const TOKEN_KEY = "india_chat_access_token";
+const REFRESH_KEY = "india_chat_refresh_token";
+
+export const API_BASE = import.meta.env.VITE_API_URL
+  ? String(import.meta.env.VITE_API_URL).replace(/\/$/, "")
+  : "";
+
+export function getFullUrl(path?: string | null): string {
+  if (!path) return "";
+  if (path.startsWith("http://") || path.startsWith("https://")) return path;
+  return `${API_BASE}${path.startsWith("/") ? "" : "/"}${path}`;
+}
+
+export function getStoredToken(): string | null {
+  // Use sessionStorage so multiple tabs in the same browser are 100% isolated and never conflict
+  return sessionStorage.getItem(TOKEN_KEY);
+}
+
+export function setTokens(accessToken: string, refreshToken?: string) {
+  sessionStorage.setItem(TOKEN_KEY, accessToken);
+  if (refreshToken) sessionStorage.setItem(REFRESH_KEY, refreshToken);
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(REFRESH_KEY);
+  localStorage.removeItem("bharatchat_token");
+}
+
+export function clearTokens() {
+  sessionStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(REFRESH_KEY);
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(REFRESH_KEY);
+  localStorage.removeItem("bharatchat_token");
+}
+
+async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  const url = endpoint.startsWith("http") ? endpoint : `${API_BASE}${endpoint}`;
+  const token = getStoredToken();
+  const headers = new Headers(options.headers || {});
+
+  if (token && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  if (!(options.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  let res = await fetch(url, { ...options, headers });
+
+  // Handle token expiration: attempt automatic refresh once per tab
+  if (res.status === 401 && sessionStorage.getItem(REFRESH_KEY)) {
+    const refreshToken = sessionStorage.getItem(REFRESH_KEY);
+    try {
+      const refreshRes = await fetch(`${API_BASE}/api/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken }),
+      });
+      if (refreshRes.ok) {
+        const refreshData = await refreshRes.json();
+        setTokens(refreshData.accessToken, refreshData.refreshToken);
+        headers.set("Authorization", `Bearer ${refreshData.accessToken}`);
+        res = await fetch(url, { ...options, headers });
+      } else {
+        clearTokens();
+        window.dispatchEvent(new Event("auth:expired"));
+      }
+    } catch {
+      clearTokens();
+      window.dispatchEvent(new Event("auth:expired"));
+    }
+  }
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.message || `Request failed with status ${res.status}`);
+  }
+  return data;
+}
+
+export const api = {
+  auth: {
+    requestOtp: (destination: string) =>
+      request<{
+        success: boolean;
+        message: string;
+        devOtp?: string;
+        userExists?: boolean;
+        isNewUser?: boolean;
+        username?: string;
+        displayName?: string;
+      }>("/api/auth/otp/request", {
+        method: "POST",
+        body: JSON.stringify({ destination }),
+      }),
+
+    checkUsername: (username: string) =>
+      request<{ success: boolean; available: boolean }>(
+        `/api/auth/check-username?username=${encodeURIComponent(username)}`
+      ),
+
+    verifyOtp: (payload: { destination: string; code: string; username?: string; displayName?: string }) =>
+      request<{ success: boolean; user: User; accessToken: string; refreshToken: string }>("/api/auth/otp/verify", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+
+    getMe: () =>
+      request<{ success: boolean; user: User }>("/api/auth/me"),
+
+    logout: () =>
+      request<{ success: boolean; message: string }>("/api/auth/logout", { method: "POST" }),
+  },
+
+  users: {
+    search: (query: string) =>
+      request<{ success: boolean; users: User[] }>(`/api/users/search?q=${encodeURIComponent(query)}`),
+
+    updateMe: (data: { displayName?: string; username?: string; bio?: string | null }) =>
+      request<{ success: boolean; user: User }>("/api/users/me", {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+
+    block: (userId: string) =>
+      request<{ success: boolean; message: string }>(`/api/users/${userId}/block`, { method: "POST" }),
+
+    unblock: (userId: string) =>
+      request<{ success: boolean; message: string }>(`/api/users/${userId}/block`, { method: "DELETE" }),
+
+    report: (userId: string, reason: string, details?: string) =>
+      request<{ success: boolean; reportId: string }>(`/api/users/${userId}/report`, {
+        method: "POST",
+        body: JSON.stringify({ reason, details }),
+      }),
+  },
+
+  conversations: {
+    list: () =>
+      request<{ success: boolean; conversations: Conversation[] }>("/api/conversations"),
+
+    getById: (conversationId: string) =>
+      request<{ success: boolean; conversation: Conversation }>(`/api/conversations/${conversationId}`),
+
+    createDirect: (userId: string) =>
+      request<{ success: boolean; conversation: Conversation; existing?: boolean }>("/api/conversations/direct", {
+        method: "POST",
+        body: JSON.stringify({ userId }),
+      }),
+
+    createGroup: (title: string, memberIds: string[]) =>
+      request<{ success: boolean; conversation: Conversation }>("/api/conversations/group", {
+        method: "POST",
+        body: JSON.stringify({ title, memberIds }),
+      }),
+
+    updateGroup: (conversationId: string, title: string) =>
+      request<{ success: boolean; conversation: Conversation }>(`/api/conversations/${conversationId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ title }),
+      }),
+
+    getMembers: (conversationId: string) =>
+      request<{ success: boolean; members: Conversation["members"] }>(`/api/conversations/${conversationId}/members`),
+
+    addMember: (conversationId: string, userId: string) =>
+      request<{ success: boolean; member: Conversation["members"][0] }>(`/api/conversations/${conversationId}/members`, {
+        method: "POST",
+        body: JSON.stringify({ userId }),
+      }),
+
+    removeMember: (conversationId: string, userId: string) =>
+      request<{ success: boolean; message: string }>(`/api/conversations/${conversationId}/members/${userId}`, {
+        method: "DELETE",
+      }),
+  },
+
+  messages: {
+    getHistory: (conversationId: string, limit = 40, cursor?: string) => {
+      let url = `/api/messages/conversation/${conversationId}?limit=${limit}`;
+      if (cursor) url += `&cursor=${cursor}`;
+      return request<{ success: boolean; messages: Message[]; nextCursor?: string | null }>(url);
+    },
+
+    send: (payload: {
+      conversationId: string;
+      body?: string;
+      type?: 'TEXT' | 'IMAGE' | 'VIDEO' | 'DOCUMENT' | 'VOICE';
+      replyToId?: string;
+      attachments?: Array<{
+        originalName: string;
+        storagePath: string;
+        mimeType: string;
+        sizeBytes: number;
+      }>;
+    }) =>
+      request<{ success: boolean; message: Message }>("/api/messages", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+
+    edit: (messageId: string, body: string) =>
+      request<{ success: boolean; message: Message }>(`/api/messages/${messageId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ body }),
+      }),
+
+    remove: (messageId: string) =>
+      request<{ success: boolean; message: Message }>(`/api/messages/${messageId}`, {
+        method: "DELETE",
+      }),
+
+    markRead: (messageId: string) =>
+      request<{ success: boolean }>(`/api/messages/${messageId}/read`, {
+        method: "POST",
+      }),
+
+    markConversationRead: (conversationId: string) =>
+      request<{ success: boolean }>(`/api/messages/conversation/${conversationId}/read`, {
+        method: "POST",
+      }),
+  },
+
+  uploads: {
+    upload: async (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await request<{
+        success: boolean;
+        file: {
+          originalName: string;
+          filename: string;
+          mimeType: string;
+          sizeBytes: number;
+          url: string;
+        };
+      }>("/api/uploads", {
+        method: "POST",
+        body: formData,
+      });
+      return res.file;
+    },
+  },
+};
