@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useRef } from "react";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api/client";
 import { Language, translations } from "../utils/i18n";
@@ -6,12 +6,14 @@ import {
   MessageSquare,
   ShieldCheck,
   ArrowRight,
-  Sparkles,
   CheckCircle2,
   UserX,
-  AlertCircle,
   Check,
-  UserCheck,
+  Eye,
+  EyeOff,
+  Lock,
+  User,
+  AtSign,
 } from "lucide-react";
 
 interface AuthScreenProps {
@@ -20,19 +22,21 @@ interface AuthScreenProps {
 }
 
 export const AuthScreen: React.FC<AuthScreenProps> = ({ lang, onToggleLang }) => {
-  const { login } = useAuth();
-  const [destination, setDestination] = useState("");
-  const [step, setStep] = useState<"REQUEST" | "VERIFY">("REQUEST");
-  const [otp, setOtp] = useState("");
-  const [devOtp, setDevOtp] = useState<string | null>(null);
+  const { loginWithPassword, registerWithPassword, loginAsGuest } = useAuth();
+  const [tab, setTab] = useState<"SIGNIN" | "REGISTER">("SIGNIN");
 
-  // Existing user vs new user registration
-  const [userExists, setUserExists] = useState<boolean | null>(null);
-  const [existingDisplayName, setExistingDisplayName] = useState<string | null>(null);
+  // Sign In state
+  const [loginIdentifier, setLoginIdentifier] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
 
-  // Registration fields
-  const [displayName, setDisplayName] = useState("");
-  const [username, setUsername] = useState("");
+  // Register state
+  const [regDisplayName, setRegDisplayName] = useState("");
+  const [regUsername, setRegUsername] = useState("");
+  const [regIdentifier, setRegIdentifier] = useState("");
+  const [regPassword, setRegPassword] = useState("");
+  const [regConfirmPassword, setRegConfirmPassword] = useState("");
+  const [showRegPassword, setShowRegPassword] = useState(false);
   const [usernameStatus, setUsernameStatus] = useState<"IDLE" | "CHECKING" | "AVAILABLE" | "TAKEN">("IDLE");
   const checkTimeoutRef = useRef<any>(null);
 
@@ -41,34 +45,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ lang, onToggleLang }) =>
 
   const t = translations[lang];
 
-  const handleRequestOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    if (!destination.trim() || destination.length < 5) {
-      setError("Please enter a valid phone number (e.g. +919876543210) or email address.");
-      return;
-    }
-
-    try {
-      setLoading(true);
-      const res = await api.auth.requestOtp(destination.trim());
-      if (res.devOtp) {
-        setDevOtp(res.devOtp);
-      }
-      setUserExists(Boolean(res.userExists));
-      setExistingDisplayName(res.displayName || res.username || null);
-      setStep("VERIFY");
-    } catch (err: any) {
-      setError(err.message || "Failed to generate OTP. Please try again.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Live username availability check
+  // Handle Username Change with live check
   const handleUsernameChange = (val: string) => {
     const clean = val.toLowerCase().replace(/[^a-z0-9_]/g, "");
-    setUsername(clean);
+    setRegUsername(clean);
     if (clean.length < 3) {
       setUsernameStatus("IDLE");
       return;
@@ -86,59 +66,81 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ lang, onToggleLang }) =>
     }, 400);
   };
 
-  const handleVerifyOtp = async (e: React.FormEvent) => {
+  // Sign In Handler
+  const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (otp.length !== 6) {
-      setError("Please enter the 6-digit verification code.");
+
+    const identifier = loginIdentifier.trim();
+    if (!identifier) {
+      setError("Please enter your Username, Mobile or Email.");
       return;
     }
-
-    // Validation for new user registration
-    if (userExists === false) {
-      if (!displayName.trim()) {
-        setError("Please enter your display name.");
-        return;
-      }
-      if (!username.trim() || username.length < 3) {
-        setError("Please enter a valid username (at least 3 characters).");
-        return;
-      }
-      if (usernameStatus === "TAKEN") {
-        setError("This username already exists. Please choose a different username.");
-        return;
-      }
+    if (!loginPassword) {
+      setError("Please enter your password.");
+      return;
     }
 
     try {
       setLoading(true);
-      await login({
-        destination: destination.trim(),
-        code: otp,
-        displayName: userExists === false ? displayName.trim() : undefined,
-        username: userExists === false ? username.trim() : undefined,
+      await loginWithPassword({
+        identifier,
+        password: loginPassword,
       });
     } catch (err: any) {
-      setError(err.message || "Invalid or expired OTP code.");
+      setError(err.message || "Invalid credentials. Please check your username and password.");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleAnonymousLogin = async () => {
-    const randomGuestId = `guest_${Math.random().toString(36).substring(2, 8)}`;
-    const guestDest = `${randomGuestId}@guest.local`;
+  // Register Handler
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+
+    if (!regDisplayName.trim()) {
+      setError("Please enter your full name / display name.");
+      return;
+    }
+    if (!regUsername.trim() || regUsername.length < 3) {
+      setError("Username must be at least 3 characters (letters, numbers, underscore).");
+      return;
+    }
+    if (usernameStatus === "TAKEN") {
+      setError("This username is already taken. Please choose another username.");
+      return;
+    }
+    if (regPassword.length < 6) {
+      setError("Password must be at least 6 characters long.");
+      return;
+    }
+    if (regPassword !== regConfirmPassword) {
+      setError("Passwords do not match. Please re-enter.");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      await registerWithPassword({
+        username: regUsername.trim(),
+        displayName: regDisplayName.trim(),
+        password: regPassword,
+        identifier: regIdentifier.trim() || undefined,
+      });
+    } catch (err: any) {
+      setError(err.message || "Registration failed. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Quick Guest Login
+  const handleGuestLogin = async () => {
     try {
       setLoading(true);
       setError(null);
-      const reqRes = await api.auth.requestOtp(guestDest);
-      const code = reqRes.devOtp || "123456";
-      await login({
-        destination: guestDest,
-        code,
-        displayName: `Guest (${randomGuestId.slice(-4)})`,
-        username: randomGuestId,
-      });
+      await loginAsGuest();
     } catch (err: any) {
       setError(err.message || "Failed to create guest identity");
     } finally {
@@ -166,7 +168,39 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ lang, onToggleLang }) =>
           <p className="text-emerald-100 text-xs mt-1 font-medium">{t.appTagline}</p>
         </div>
 
-        {/* Content */}
+        {/* Tab Switcher */}
+        <div className="flex border-b border-slate-100 bg-slate-50/50">
+          <button
+            type="button"
+            onClick={() => {
+              setTab("SIGNIN");
+              setError(null);
+            }}
+            className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-all border-b-2 ${
+              tab === "SIGNIN"
+                ? "border-emerald-600 text-emerald-700 bg-white shadow-sm"
+                : "border-transparent text-slate-400 hover:text-slate-600"
+            }`}
+          >
+            {t.signInTab}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setTab("REGISTER");
+              setError(null);
+            }}
+            className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-all border-b-2 ${
+              tab === "REGISTER"
+                ? "border-emerald-600 text-emerald-700 bg-white shadow-sm"
+                : "border-transparent text-slate-400 hover:text-slate-600"
+            }`}
+          >
+            {t.registerTab}
+          </button>
+        </div>
+
+        {/* Content Body */}
         <div className="p-6 sm:p-8">
           {error && (
             <div className="mb-5 p-3 rounded-xl bg-red-50 border border-red-200 text-red-600 text-xs flex items-start space-x-2">
@@ -175,33 +209,71 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ lang, onToggleLang }) =>
             </div>
           )}
 
-          {step === "REQUEST" ? (
-            <form onSubmit={handleRequestOtp} className="space-y-4">
+          {tab === "SIGNIN" ? (
+            /* Sign In Form */
+            <form onSubmit={handleSignIn} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                  {t.mobileOrEmail}
+                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                  {t.identifierLabel}
                 </label>
                 <div className="relative">
                   <input
                     type="text"
-                    value={destination}
-                    onChange={(e) => setDestination(e.target.value)}
-                    placeholder="+91 98765 43210 or user@example.com"
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-slate-800 placeholder-slate-400 text-sm"
+                    value={loginIdentifier}
+                    onChange={(e) => setLoginIdentifier(e.target.value)}
+                    placeholder={t.identifierPlaceholder}
+                    className="w-full pl-9 pr-4 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-800 placeholder-slate-400 text-sm"
                     autoFocus
                   />
+                  <User className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
                 </div>
-                <p className="text-xs text-slate-400 mt-1">{t.loginSubtitle}</p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                  {t.passwordLabel}
+                </label>
+                <div className="relative">
+                  <input
+                    type={showLoginPassword ? "text" : "password"}
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    placeholder={t.passwordPlaceholder}
+                    className="w-full pl-9 pr-10 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-800 placeholder-slate-400 text-sm"
+                  />
+                  <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
+                  <button
+                    type="button"
+                    onClick={() => setShowLoginPassword(!showLoginPassword)}
+                    className="absolute right-3 top-3 text-slate-400 hover:text-slate-600"
+                  >
+                    {showLoginPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
 
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-medium text-sm transition-colors flex items-center justify-center space-x-2 shadow-lg shadow-emerald-600/20 disabled:opacity-50"
+                className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-semibold text-sm transition-colors flex items-center justify-center space-x-2 shadow-lg shadow-emerald-600/20 disabled:opacity-50"
               >
-                <span>{loading ? "..." : t.continueWithOtp}</span>
+                <span>{loading ? "Signing in..." : t.signInBtn}</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
+
+              <div className="text-center pt-1">
+                <span className="text-xs text-slate-500">{t.dontHaveAccount} </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTab("REGISTER");
+                    setError(null);
+                  }}
+                  className="text-xs text-emerald-600 hover:underline font-semibold"
+                >
+                  {t.createOneNow}
+                </button>
+              </div>
 
               <div className="relative py-2 flex items-center justify-center">
                 <div className="border-t border-slate-200 w-full"></div>
@@ -212,7 +284,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ lang, onToggleLang }) =>
 
               <button
                 type="button"
-                onClick={handleAnonymousLogin}
+                onClick={handleGuestLogin}
                 disabled={loading}
                 className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-medium text-xs transition-colors flex items-center justify-center space-x-2"
               >
@@ -221,137 +293,139 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ lang, onToggleLang }) =>
               </button>
             </form>
           ) : (
-            <form onSubmit={handleVerifyOtp} className="space-y-4">
-              {/* Existing user alert vs new user prompt */}
-              {userExists ? (
-                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-xs flex items-center space-x-2">
-                  <UserCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>
-                    Welcome back, <strong>{existingDisplayName}</strong>! Enter OTP to sign in.
-                  </span>
-                </div>
-              ) : (
-                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-xs flex items-start space-x-2">
-                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                  <span>
-                    No account found with this number. Please register your profile below.
-                  </span>
-                </div>
-              )}
-
-              {/* Dev OTP Box */}
-              {devOtp && (
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-700 text-xs flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
-                    <span>{t.devOtpLabel} <strong>{devOtp}</strong></span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setOtp(devOtp)}
-                    className="text-emerald-600 hover:text-emerald-800 font-semibold underline text-xs"
-                  >
-                    {t.autoFill}
-                  </button>
-                </div>
-              )}
-
-              {/* OTP Input */}
+            /* Register Form */
+            <form onSubmit={handleRegister} className="space-y-3.5">
               <div>
-                <div className="flex justify-between items-center mb-1">
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    {t.verifyCode}
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => { setStep("REQUEST"); setOtp(""); }}
-                    className="text-xs text-emerald-600 hover:underline"
-                  >
-                    {t.changeDestination}
-                  </button>
-                </div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                  {t.displayNameLabel} <span className="text-red-500">*</span>
+                </label>
                 <input
                   type="text"
-                  maxLength={6}
-                  value={otp}
-                  onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
-                  placeholder="123456"
-                  className="w-full px-4 py-3 text-center tracking-widest text-xl font-bold rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-800 text-sm"
+                  value={regDisplayName}
+                  onChange={(e) => setRegDisplayName(e.target.value)}
+                  placeholder={t.displayNamePlaceholder}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-800 text-xs"
                   autoFocus
                 />
               </div>
 
-              {/* Show Name and Username fields ONLY for NEW users */}
-              {!userExists && (
-                <div className="space-y-3 pt-2 border-t border-slate-100">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">
-                      Display Name <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={displayName}
-                      onChange={(e) => setDisplayName(e.target.value)}
-                      placeholder="e.g. Rahul Sharma"
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-800 text-xs"
-                    />
-                  </div>
-
-                  <div>
-                    <div className="flex justify-between items-center mb-1">
-                      <label className="block text-xs font-semibold text-slate-600">
-                        Unique Username <span className="text-red-500">*</span>
-                      </label>
-                      {usernameStatus === "CHECKING" && (
-                        <span className="text-[10px] text-slate-400">Checking...</span>
-                      )}
-                      {usernameStatus === "AVAILABLE" && (
-                        <span className="text-[10px] text-emerald-600 font-semibold flex items-center">
-                          <Check className="w-3 h-3 mr-0.5" /> Available
-                        </span>
-                      )}
-                      {usernameStatus === "TAKEN" && (
-                        <span className="text-[10px] text-red-600 font-semibold">
-                          Already exists! Choose another
-                        </span>
-                      )}
-                    </div>
-                    <input
-                      type="text"
-                      value={username}
-                      onChange={(e) => handleUsernameChange(e.target.value)}
-                      placeholder="e.g. rahul_99"
-                      className={`w-full px-3 py-2 rounded-xl border text-slate-800 text-xs focus:outline-none focus:ring-2 ${usernameStatus === "TAKEN"
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block text-xs font-semibold text-slate-600">
+                    {t.usernameLabel} <span className="text-red-500">*</span>
+                  </label>
+                  {usernameStatus === "CHECKING" && (
+                    <span className="text-[10px] text-slate-400">Checking...</span>
+                  )}
+                  {usernameStatus === "AVAILABLE" && (
+                    <span className="text-[10px] text-emerald-600 font-semibold flex items-center">
+                      <Check className="w-3 h-3 mr-0.5" /> Available
+                    </span>
+                  )}
+                  {usernameStatus === "TAKEN" && (
+                    <span className="text-[10px] text-red-600 font-semibold">
+                      Already exists! Choose another
+                    </span>
+                  )}
+                </div>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={regUsername}
+                    onChange={(e) => handleUsernameChange(e.target.value)}
+                    placeholder={t.usernamePlaceholder}
+                    className={`w-full pl-8 pr-3.5 py-2.5 rounded-xl border text-slate-800 text-xs focus:outline-none focus:ring-2 ${
+                      usernameStatus === "TAKEN"
                         ? "border-red-300 focus:ring-red-400 bg-red-50/50"
                         : usernameStatus === "AVAILABLE"
                           ? "border-emerald-300 focus:ring-emerald-400 bg-emerald-50/30"
                           : "border-slate-200 focus:ring-emerald-500"
-                        }`}
-                    />
-                  </div>
+                    }`}
+                  />
+                  <AtSign className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-3" />
                 </div>
-              )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                  {t.optionalContactLabel}
+                </label>
+                <input
+                  type="text"
+                  value={regIdentifier}
+                  onChange={(e) => setRegIdentifier(e.target.value)}
+                  placeholder={t.optionalContactPlaceholder}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-800 text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                  {t.passwordLabel} (min. 6 characters) <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type={showRegPassword ? "text" : "password"}
+                    value={regPassword}
+                    onChange={(e) => setRegPassword(e.target.value)}
+                    placeholder="Create a strong password"
+                    className="w-full pl-8 pr-9 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-800 text-xs"
+                  />
+                  <Lock className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-3" />
+                  <button
+                    type="button"
+                    onClick={() => setShowRegPassword(!showRegPassword)}
+                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                  >
+                    {showRegPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                  {t.confirmPasswordLabel} <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type={showRegPassword ? "text" : "password"}
+                    value={regConfirmPassword}
+                    onChange={(e) => setRegConfirmPassword(e.target.value)}
+                    placeholder={t.confirmPasswordPlaceholder}
+                    className="w-full pl-8 pr-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-800 text-xs"
+                  />
+                  <Lock className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-3" />
+                </div>
+              </div>
 
               <button
                 type="submit"
-                disabled={loading || otp.length !== 6 || (!userExists && usernameStatus === "TAKEN")}
-                className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-medium text-sm transition-colors flex items-center justify-center space-x-2 shadow-lg shadow-emerald-600/20 disabled:opacity-50"
+                disabled={loading || usernameStatus === "TAKEN"}
+                className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-semibold text-sm transition-colors flex items-center justify-center space-x-2 shadow-lg shadow-emerald-600/20 disabled:opacity-50 mt-2"
               >
-                <span>
-                  {loading
-                    ? "..."
-                    : userExists
-                      ? "Verify & Sign In"
-                      : "Register & Start Chatting"}
-                </span>
+                <span>{loading ? "Registering..." : t.registerBtn}</span>
                 <CheckCircle2 className="w-4 h-4" />
               </button>
+
+              <div className="text-center pt-1">
+                <span className="text-xs text-slate-500">{t.alreadyHaveAccount} </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTab("SIGNIN");
+                    setError(null);
+                  }}
+                  className="text-xs text-emerald-600 hover:underline font-semibold"
+                >
+                  {t.signInNow}
+                </button>
+              </div>
             </form>
           )}
 
-          <div className="mt-6 pt-6 border-t border-slate-100 flex items-center justify-center space-x-2 text-slate-400 text-xs">
+          <div className="mt-6 pt-5 border-t border-slate-100 flex items-center justify-center space-x-2 text-slate-400 text-xs">
             <ShieldCheck className="w-4 h-4 text-emerald-500" />
-            <span>Encrypted local session • Zero cloud cost</span>
+            <span>Encrypted session • Direct login, no OTP required</span>
           </div>
         </div>
       </div>

@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
 import { prisma } from "../../config/prisma";
 import { env } from "../../config/env";
 import { HttpError } from "../../utils/http-error";
@@ -20,6 +21,184 @@ export async function checkUsername(req: Request, res: Response) {
   if (!/^[a-zA-Z0-9_]+$/.test(username)) throw new HttpError(400, "Username can only contain letters, numbers, and underscores");
   const existing = await prisma.user.findUnique({ where: { username } });
   res.json({ success: true, available: !existing });
+}
+
+export async function register(req: Request, res: Response) {
+  const { username, displayName, password } = req.body;
+  const cleanUsername = String(username).trim().toLowerCase();
+  const cleanDisplayName = String(displayName).trim();
+  const rawIdentifier = req.body.identifier ? String(req.body.identifier).trim() : undefined;
+
+  let email = req.body.email ? String(req.body.email).trim().toLowerCase() : undefined;
+  let phone = req.body.phone ? String(req.body.phone).trim() : undefined;
+
+  if (rawIdentifier) {
+    if (rawIdentifier.includes("@")) {
+      email = rawIdentifier.toLowerCase();
+    } else {
+      phone = rawIdentifier;
+    }
+  }
+
+  // Check unique username
+  const existingUser = await prisma.user.findUnique({ where: { username: cleanUsername } });
+  if (existingUser) {
+    throw new HttpError(409, "Username already exists. Please choose another username.");
+  }
+
+  if (email) {
+    const existingEmail = await prisma.user.findUnique({ where: { email } });
+    if (existingEmail) {
+      throw new HttpError(409, "An account with this email already exists.");
+    }
+  }
+
+  if (phone) {
+    const existingPhone = await prisma.user.findUnique({ where: { phone } });
+    if (existingPhone) {
+      throw new HttpError(409, "An account with this phone number already exists.");
+    }
+  }
+
+  const passwordHash = await bcrypt.hash(password, 10);
+
+  const user = await prisma.user.create({
+    data: {
+      username: cleanUsername,
+      displayName: cleanDisplayName,
+      email: email || null,
+      phone: phone || null,
+      passwordHash,
+      isVerified: true,
+      isActive: true,
+    },
+  });
+
+  const session = await prisma.session.create({
+    data: {
+      userId: user.id,
+      refreshTokenHash: "pending",
+      expiresAt: new Date(Date.now() + env.REFRESH_TOKEN_DAYS * 86400_000),
+    },
+  });
+  const tokens = makeTokens(user.id, session.id);
+  await prisma.session.update({
+    where: { id: session.id },
+    data: { refreshTokenHash: hash(tokens.refreshToken) },
+  });
+
+  res.status(201).json({
+    success: true,
+    user: {
+      id: user.id,
+      username: user.username,
+      displayName: user.displayName,
+      email: user.email,
+      phone: user.phone,
+      avatarUrl: user.avatarUrl,
+    },
+    ...tokens,
+  });
+}
+
+export async function login(req: Request, res: Response) {
+  const identifier = String(req.body.identifier).trim();
+  const password = String(req.body.password);
+
+  const user = await prisma.user.findFirst({
+    where: {
+      OR: [
+        { username: identifier.toLowerCase() },
+        { email: identifier.toLowerCase() },
+        { phone: identifier },
+      ],
+    },
+  });
+
+  if (!user) {
+    throw new HttpError(401, "Invalid User ID/Username or Password");
+  }
+
+  if (!user.isActive) {
+    throw new HttpError(403, "Account is disabled");
+  }
+
+  if (!user.passwordHash) {
+    throw new HttpError(400, "No password configured for this account. Please register with a password.");
+  }
+
+  const isValid = await bcrypt.compare(password, user.passwordHash);
+  if (!isValid) {
+    throw new HttpError(401, "Invalid User ID/Username or Password");
+  }
+
+  const session = await prisma.session.create({
+    data: {
+      userId: user.id,
+      refreshTokenHash: "pending",
+      expiresAt: new Date(Date.now() + env.REFRESH_TOKEN_DAYS * 86400_000),
+    },
+  });
+  const tokens = makeTokens(user.id, session.id);
+  await prisma.session.update({
+    where: { id: session.id },
+    data: { refreshTokenHash: hash(tokens.refreshToken) },
+  });
+
+  res.status(200).json({
+    success: true,
+    user: {
+      id: user.id,
+      username: user.username,
+      displayName: user.displayName,
+      email: user.email,
+      phone: user.phone,
+      avatarUrl: user.avatarUrl,
+    },
+    ...tokens,
+  });
+}
+
+export async function guestLogin(_req: Request, res: Response) {
+  const randomSuffix = crypto.randomBytes(3).toString("hex");
+  const username = `guest_${randomSuffix}`;
+  const displayName = `Guest ${randomSuffix.toUpperCase()}`;
+  const dummyPassword = crypto.randomBytes(16).toString("hex");
+  const passwordHash = await bcrypt.hash(dummyPassword, 8);
+
+  const user = await prisma.user.create({
+    data: {
+      username,
+      displayName,
+      passwordHash,
+      isVerified: false,
+      isActive: true,
+    },
+  });
+
+  const session = await prisma.session.create({
+    data: {
+      userId: user.id,
+      refreshTokenHash: "pending",
+      expiresAt: new Date(Date.now() + env.REFRESH_TOKEN_DAYS * 86400_000),
+    },
+  });
+  const tokens = makeTokens(user.id, session.id);
+  await prisma.session.update({
+    where: { id: session.id },
+    data: { refreshTokenHash: hash(tokens.refreshToken) },
+  });
+
+  res.status(201).json({
+    success: true,
+    user: {
+      id: user.id,
+      username: user.username,
+      displayName: user.displayName,
+      avatarUrl: user.avatarUrl,
+    },
+    ...tokens,
+  });
 }
 
 export async function requestOtp(req: Request, res: Response) {

@@ -42,6 +42,54 @@ describe("India Chat Backend API Tests", () => {
     expect(data.status).toBe("healthy");
   });
 
+  it("1b. Auth - Register & Login with ID & Password", async () => {
+    const uniqueNum = Date.now().toString().slice(-6);
+    const regUsername = `passuser_${uniqueNum}`;
+    const regPassword = "secretPassword123";
+
+    // 1. Register
+    const regRes = await fetch(`${baseUrl}/api/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: regUsername,
+        displayName: "Password User",
+        password: regPassword,
+        identifier: `pass_${uniqueNum}@example.com`,
+      }),
+    });
+    expect(regRes.status).toBe(201);
+    const regData = await regRes.json();
+    expect(regData.success).toBe(true);
+    expect(regData.accessToken).toBeDefined();
+    expect(regData.user.username).toBe(regUsername);
+
+    // 2. Login with correct password
+    const loginRes = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identifier: regUsername,
+        password: regPassword,
+      }),
+    });
+    expect(loginRes.status).toBe(200);
+    const loginData = await loginRes.json();
+    expect(loginData.success).toBe(true);
+    expect(loginData.accessToken).toBeDefined();
+
+    // 3. Login with wrong password
+    const badLoginRes = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identifier: regUsername,
+        password: "wrongpassword",
+      }),
+    });
+    expect(badLoginRes.status).toBe(401);
+  });
+
   it("2. Auth - Request OTP for User 1", async () => {
     const res = await fetch(`${baseUrl}/api/auth/otp/request`, {
       method: "POST",

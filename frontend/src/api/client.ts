@@ -82,6 +82,30 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 
 export const api = {
   auth: {
+    login: (credentials: { identifier: string; password: string }) =>
+      request<{ success: boolean; user: User; accessToken: string; refreshToken: string }>("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify(credentials),
+      }),
+
+    register: (data: {
+      username: string;
+      displayName: string;
+      password: string;
+      identifier?: string;
+      email?: string;
+      phone?: string;
+    }) =>
+      request<{ success: boolean; user: User; accessToken: string; refreshToken: string }>("/api/auth/register", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+
+    guest: () =>
+      request<{ success: boolean; user: User; accessToken: string; refreshToken: string }>("/api/auth/guest", {
+        method: "POST",
+      }),
+
     requestOtp: (destination: string) =>
       request<{
         success: boolean;

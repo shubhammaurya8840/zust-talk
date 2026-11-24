@@ -5,6 +5,14 @@ import { api, clearTokens, getStoredToken, setTokens } from "../api/client";
 interface AuthContextType {
   user: User | null;
   loading: boolean;
+  loginWithPassword: (credentials: { identifier: string; password: string }) => Promise<void>;
+  registerWithPassword: (data: {
+    username: string;
+    displayName: string;
+    password: string;
+    identifier?: string;
+  }) => Promise<void>;
+  loginAsGuest: () => Promise<void>;
   login: (payload: { destination: string; code: string; username?: string; displayName?: string }) => Promise<void>;
   logout: () => Promise<void>;
   updateUser: (user: User) => void;
@@ -44,6 +52,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => window.removeEventListener("auth:expired", handleExpired);
   }, []);
 
+  const loginWithPassword = async (credentials: { identifier: string; password: string }) => {
+    const res = await api.auth.login(credentials);
+    if (res.success && res.user) {
+      setTokens(res.accessToken, res.refreshToken);
+      setUser(res.user);
+    }
+  };
+
+  const registerWithPassword = async (data: {
+    username: string;
+    displayName: string;
+    password: string;
+    identifier?: string;
+  }) => {
+    const res = await api.auth.register(data);
+    if (res.success && res.user) {
+      setTokens(res.accessToken, res.refreshToken);
+      setUser(res.user);
+    }
+  };
+
+  const loginAsGuest = async () => {
+    const res = await api.auth.guest();
+    if (res.success && res.user) {
+      setTokens(res.accessToken, res.refreshToken);
+      setUser(res.user);
+    }
+  };
+
   const login = async (payload: { destination: string; code: string; username?: string; displayName?: string }) => {
     const res = await api.auth.verifyOtp(payload);
     if (res.success && res.user) {
@@ -68,7 +105,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, updateUser }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        loading,
+        loginWithPassword,
+        registerWithPassword,
+        loginAsGuest,
+        login,
+        logout,
+        updateUser,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );
