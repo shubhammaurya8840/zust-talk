@@ -8,6 +8,19 @@ async function ensureMember(conversationId: string, userId: string) {
   if (!member) throw new HttpError(403, "You are not a member of this conversation");
 }
 
+function sanitizeViewOnceForUser(m: any, viewerId: string) {
+  if (!m.isViewOnce) return m;
+  if (m.senderId === viewerId) return m;
+  // Hide attachment URLs from history/socket until explicitly opened via /view-once, and lock after viewedAt
+  return {
+    ...m,
+    attachments: (m.attachments || []).map((a: any) => ({
+      ...a,
+      storagePath: "",
+    })),
+  };
+}
+
 export async function history(req: Request, res: Response) {
   const conversationId = req.params.conversationId as string;
   await ensureMember(conversationId, req.auth!.userId);
@@ -18,16 +31,16 @@ export async function history(req: Request, res: Response) {
     take: limit,
     ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
     orderBy: { createdAt: "desc" },
-    include: { sender: { select: { id: true, username: true, displayName: true } }, receipts: true, attachments: true }
+    include: { sender: { select: { id: true, username: true, displayName: true, avatarUrl: true } }, receipts: true, attachments: true }
   });
   const hasMore = messages.length === limit;
   const nextCursor = hasMore ? messages[messages.length - 1].id : null;
-  const sorted = [...messages].reverse();
+  const sorted = [...messages].reverse().map((m) => sanitizeViewOnceForUser(m, req.auth!.userId));
   res.json({ success: true, messages: sorted, nextCursor });
 }
 
 export async function send(req: Request, res: Response) {
-  const { conversationId, body, ciphertext, type, replyToId, attachments } = req.body;
+  const { conversationId, body, ciphertext, type, replyToId, attachments, isViewOnce } = req.body;
   await ensureMember(conversationId, req.auth!.userId);
 
   const conversation = await prisma.conversation.findUnique({
@@ -58,6 +71,7 @@ export async function send(req: Request, res: Response) {
       body: ciphertext ? null : body,
       ciphertext,
       type,
+      isViewOnce: Boolean(isViewOnce),
       replyToId,
       attachments: attachments?.length ? {
         create: attachments.map((a: { originalName: string; storagePath: string; mimeType: string; sizeBytes: number }) => ({
@@ -73,20 +87,61 @@ export async function send(req: Request, res: Response) {
           .map(m => ({ userId: m.userId }))
       }
     },
-    include: { sender: { select: { id: true, username: true, displayName: true } }, receipts: true, attachments: true }
+    include: { sender: { select: { id: true, username: true, displayName: true, avatarUrl: true } }, receipts: true, attachments: true }
   });
 
   if (io) {
-    io.to(`conversation:${conversationId}`).emit("message:new", message);
     for (const m of conversation.members) {
+      const sanitized = sanitizeViewOnceForUser(message, m.userId);
+      io.to(`user:${m.userId}`).emit("message:new", sanitized);
       if (m.userId !== req.auth!.userId) {
-        io.to(`user:${m.userId}`).emit("conversation:updated", { conversationId, lastMessage: message });
+        io.to(`user:${m.userId}`).emit("conversation:updated", { conversationId, lastMessage: sanitized });
       }
     }
   }
 
   await prisma.conversation.update({ where: { id: conversationId }, data: { updatedAt: new Date() } });
   res.status(201).json({ success: true, message });
+}
+
+export async function openViewOnce(req: Request, res: Response) {
+  const messageId = req.params.messageId as string;
+  const message = await prisma.message.findUnique({
+    where: { id: messageId },
+    include: { attachments: true, sender: { select: { id: true, username: true, displayName: true, avatarUrl: true } } }
+  });
+  if (!message) throw new HttpError(404, "Message not found");
+  await ensureMember(message.conversationId, req.auth!.userId);
+  if (!message.isViewOnce) throw new HttpError(400, "Not a view-once message");
+  if (message.senderId === req.auth!.userId) {
+    return res.json({ success: true, attachments: message.attachments, viewedAt: message.viewedAt, alreadyOpened: Boolean(message.viewedAt) });
+  }
+  if (message.viewedAt) {
+    throw new HttpError(410, "This view-once photo has already been opened");
+  }
+
+  const now = new Date();
+  const updatedCount = await prisma.message.updateMany({
+    where: { id: messageId, viewedAt: null },
+    data: { viewedAt: now },
+  });
+  if (updatedCount.count === 0) {
+    throw new HttpError(410, "This view-once photo has already been opened");
+  }
+
+  const updated = await prisma.message.findUnique({
+    where: { id: messageId },
+    include: { sender: { select: { id: true, username: true, displayName: true, avatarUrl: true } }, receipts: true, attachments: true }
+  });
+
+  if (io && updated) {
+    io.to(`conversation:${message.conversationId}`).emit("message:updated", {
+      ...updated,
+      attachments: (updated.attachments || []).map((a) => ({ ...a, storagePath: "" })),
+    });
+  }
+
+  res.json({ success: true, attachments: message.attachments, viewedAt: now.toISOString() });
 }
 
 export async function edit(req: Request, res: Response) {

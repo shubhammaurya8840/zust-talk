@@ -14,7 +14,6 @@ export function getFullUrl(path?: string | null): string {
 }
 
 export function getStoredToken(): string | null {
-  // Use sessionStorage so multiple tabs in the same browser are 100% isolated and never conflict
   return sessionStorage.getItem(TOKEN_KEY);
 }
 
@@ -49,7 +48,6 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 
   let res = await fetch(url, { ...options, headers });
 
-  // Handle token expiration: attempt automatic refresh once per tab
   if (res.status === 401 && sessionStorage.getItem(REFRESH_KEY)) {
     const refreshToken = sessionStorage.getItem(REFRESH_KEY);
     try {
@@ -142,7 +140,13 @@ export const api = {
     search: (query: string) =>
       request<{ success: boolean; users: User[] }>(`/api/users/search?q=${encodeURIComponent(query)}`),
 
-    updateMe: (data: { displayName?: string; username?: string; bio?: string | null }) =>
+    lookupByUsername: (username: string) =>
+      request<{ success: boolean; user: User }>(`/api/users/lookup/${encodeURIComponent(username.replace(/^@/, ""))}`),
+
+    getProfile: (userId: string) =>
+      request<{ success: boolean; user: User }>(`/api/users/${userId}`),
+
+    updateMe: (data: { displayName?: string; username?: string; bio?: string | null; avatarUrl?: string | null }) =>
       request<{ success: boolean; user: User }>("/api/users/me", {
         method: "PATCH",
         body: JSON.stringify(data),
@@ -167,6 +171,15 @@ export const api = {
 
     getById: (conversationId: string) =>
       request<{ success: boolean; conversation: Conversation }>(`/api/conversations/${conversationId}`),
+
+    toggleArchive: (conversationId: string, archived: boolean) =>
+      request<{ success: boolean; archived: boolean; archivedAt?: string | null }>(
+        `/api/conversations/${conversationId}/archive`,
+        {
+          method: "POST",
+          body: JSON.stringify({ archived }),
+        }
+      ),
 
     createDirect: (userId: string) =>
       request<{ success: boolean; conversation: Conversation; existing?: boolean }>("/api/conversations/direct", {
@@ -211,7 +224,8 @@ export const api = {
     send: (payload: {
       conversationId: string;
       body?: string;
-      type?: 'TEXT' | 'IMAGE' | 'VIDEO' | 'DOCUMENT' | 'VOICE';
+      type?: "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT" | "VOICE" | "SYSTEM";
+      isViewOnce?: boolean;
       replyToId?: string;
       attachments?: Array<{
         originalName: string;
@@ -223,6 +237,21 @@ export const api = {
       request<{ success: boolean; message: Message }>("/api/messages", {
         method: "POST",
         body: JSON.stringify(payload),
+      }),
+
+    openViewOnce: (messageId: string) =>
+      request<{
+        success: boolean;
+        attachments: Array<{
+          id: string;
+          originalName: string;
+          storagePath: string;
+          mimeType: string;
+          sizeBytes: number;
+        }>;
+        viewedAt: string;
+      }>(`/api/messages/${messageId}/view-once`, {
+        method: "POST",
       }),
 
     edit: (messageId: string, body: string) =>
@@ -269,7 +298,7 @@ export const api = {
   },
 
   translate: {
-    convert: (text: string, targetLang: "en" | "hi" = "en") =>
+    convert: (text: string, targetLang = "en", sourceLang = "auto") =>
       request<{
         success: boolean;
         originalText: string;
@@ -279,7 +308,7 @@ export const api = {
         converted: boolean;
       }>("/api/translate", {
         method: "POST",
-        body: JSON.stringify({ text, targetLang }),
+        body: JSON.stringify({ text, targetLang, sourceLang }),
       }),
   },
 };

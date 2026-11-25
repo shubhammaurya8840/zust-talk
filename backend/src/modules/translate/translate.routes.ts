@@ -9,58 +9,41 @@ router.use(requireAuth);
 
 const translateSchema = z.object({
   text: z.string().min(1).max(5000),
-  targetLang: z.enum(["en", "hi"]).default("en"),
+  targetLang: z.string().min(2).max(12).default("en"),
+  sourceLang: z.string().min(2).max(12).default("auto"),
 });
 
-// Common Hinglish (Romanized Hindi) markers to distinguish Hinglish from pure English
+// Comprehensive Romanized Hindi (Hinglish) markers
 const HINGLISH_MARKERS = new Set([
   "kya", "kaise", "kaisi", "kaisa", "hai", "hain", "ho", "hu", "hun", "hoon",
   "main", "mein", "hum", "tum", "aap", "woh", "yeh", "ye", "vo", "wo",
-  "kar", "karo", "karna", "karenge", "kiya", "raha", "rahi", "rahe",
+  "kar", "karo", "karna", "karenge", "karega", "karegi", "kiya", "raha", "rahi", "rahe",
   "tha", "thi", "the", "hoga", "hogi", "honge", "nahi", "nhi", "na", "mat",
   "haan", "ha", "ji", "bhai", "yaar", "dost", "ghar", "kal", "aaj", "abhi",
   "kab", "kahan", "kaha", "kyun", "kyu", "kyunki", "kaun", "kitna", "kitni",
-  "bahut", "bohot", "bhot", "accha", "acha", "achha", "theek", "thik",
+  "bahut", "bohot", "bhot", "accha", "acha", "achha", "theek", "thik", "badiya", "mast",
   "chalo", "chal", "batao", "btao", "bata", "sun", "suno", "dekh", "dekho",
-  "milte", "milna", "bhej", "bhejo", "bhejna", "jana", "ja", "jao", "aana", "aa", "aao",
-  "khana", "kha", "khao", "paani", "pani", "kaam", "paisa", "paise",
-  "samajh", "pata", "chahiye", "chahta", "chahti", "mera", "meri", "mere",
-  "tera", "teri", "tere", "tumhara", "aapka", "apna", "apni", "apne",
+  "milte", "milna", "milenge", "bhej", "bhejo", "bhejna", "bhejdo", "jana", "ja", "jao", "jaunga",
+  "aana", "aa", "aao", "aaunga", "khana", "kha", "khao", "paani", "pani", "kaam", "paisa", "paise",
+  "samajh", "pata", "pta", "chahiye", "chahta", "chahti", "mera", "meri", "mere",
+  "tera", "teri", "tere", "tumhara", "aapka", "apna", "apni", "apne", "naam",
   "sab", "kuch", "koi", "aur", "lekin", "par", "toh", "bhi", "se", "ko",
   "ka", "ki", "ke", "pe", "liye", "saath", "sath", "baad", "pehle",
   "namaste", "dhanyawad", "shukriya", "madad", "zaroor", "jaldi", "der",
   "raat", "subah", "shaam", "din", "waqt", "samay", "baat", "bol", "bolo",
   "likh", "likho", "padh", "padho", "sunao", "rakho", "lena", "dena", "dedo", "lelo",
-  "kr", "kro", "rha", "rhi", "rhe", "h", "k", "m", "tu", "mujhe", "mujhko",
+  "kr", "kro", "rha", "rhi", "rhe", "tu", "mujhe", "mujhko",
   "tujhe", "unko", "unhe", "humko", "hume", "isko", "usko", "idhar", "udhar",
   "yahan", "wahan", "upar", "niche", "andar", "bahar", "paas", "door",
   "khush", "udaas", "gussa", "pyaar", "pyar", "dhyan", "intezar", "maaf",
-  "sahi", "galat", "mushkil", "aasan", "naya", "purana", "bada", "chota"
+  "sahi", "galat", "mushkil", "aasan", "naya", "purana", "bada", "chota",
+  "gaya", "gayi", "gaye", "diya", "liya", "kkrh", "bhaiya", "didi"
 ]);
 
-// Local fallback phrase/word dictionary when external translation APIs are unavailable
-const LOCAL_HINGLISH_PHRASES: Array<[RegExp, string]> = [
-  [/\bkaise ho\b/gi, "how are you"],
-  [/\baap kaise hain\b/gi, "how are you"],
-  [/\bkya haal hai\b/gi, "how are things"],
-  [/\bmain theek hu[n]?\b/gi, "I am fine"],
-  [/\bmain thik hu[n]?\b/gi, "I am fine"],
-  [/\btheek hai\b/gi, "okay"],
-  [/\bthik hai\b/gi, "okay"],
-  [/\bkya kar rahe ho\b/gi, "what are you doing"],
-  [/\bkya kr rhe ho\b/gi, "what are you doing"],
-  [/\bghar ja raha hu[n]?\b/gi, "going home"],
-  [/\bkal milte hai[n]?\b/gi, "see you tomorrow"],
-  [/\babhi aa raha hu[n]?\b/gi, "coming right now"],
-  [/\bkhana kha liya\b/gi, "did you eat food"],
-  [/\bnamaste\b/gi, "hello"],
-  [/\bdhanyawad\b/gi, "thank you"],
-  [/\bshukriya\b/gi, "thank you"],
-  [/\bmaaf karna\b/gi, "sorry"],
-  [/\bsubah ho gayi\b/gi, "it is morning"],
-  [/\bshubh ratri\b/gi, "good night"],
-  [/\bsuprabhat\b/gi, "good morning"],
-];
+const REQUEST_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+  "Accept": "application/json, text/plain, */*",
+};
 
 function hasDevanagari(text: string): boolean {
   return /[\u0900-\u097F]/.test(text);
@@ -68,6 +51,9 @@ function hasDevanagari(text: string): boolean {
 
 function isLikelyHinglish(text: string): boolean {
   if (hasDevanagari(text)) return false;
+  // Ignore pure non-Latin scripts (Arabic, Tamil, Bengali, Japanese, etc.)
+  if (/[^\u0000-\u024F\s\p{P}\p{S}\p{N}]/u.test(text)) return false;
+
   const words = text
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
@@ -75,18 +61,17 @@ function isLikelyHinglish(text: string): boolean {
     .filter(Boolean);
   if (words.length === 0) return false;
 
-  let matches = 0;
   for (const w of words) {
-    if (HINGLISH_MARKERS.has(w)) matches++;
+    if (HINGLISH_MARKERS.has(w)) return true;
   }
-  return matches >= 1;
+  return false;
 }
 
-async function fetchWithTimeout(url: string, timeoutMs = 4500): Promise<globalThis.Response> {
+async function fetchWithTimeout(url: string, timeoutMs = 8000): Promise<globalThis.Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { signal: controller.signal });
+    return await fetch(url, { signal: controller.signal, headers: REQUEST_HEADERS });
   } finally {
     clearTimeout(timer);
   }
@@ -149,19 +134,48 @@ async function googleTranslate(
   }
 }
 
-function localFallbackToEnglish(text: string): string {
-  let out = text;
-  for (const [pattern, replacement] of LOCAL_HINGLISH_PHRASES) {
-    out = out.replace(pattern, replacement);
+async function myMemoryTranslate(
+  text: string,
+  sourceLang: string,
+  targetLang: string
+): Promise<{ translatedText: string } | null> {
+  try {
+    const sl = sourceLang === "auto" ? "autodetect" : sourceLang;
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${encodeURIComponent(sl)}|${encodeURIComponent(targetLang)}`;
+    const res = await fetchWithTimeout(url);
+    if (!res.ok) return null;
+    const data = (await res.json()) as any;
+    const translatedText = data?.responseData?.translatedText;
+    if (typeof translatedText === "string" && translatedText.trim() && data?.responseStatus === 200) {
+      return { translatedText: translatedText.trim() };
+    }
+    return null;
+  } catch {
+    return null;
   }
-  return out;
+}
+
+async function translateAny(
+  text: string,
+  sourceLang: string,
+  targetLang: string
+): Promise<{ translatedText: string; detectedLang?: string } | null> {
+  const g = await googleTranslate(text, sourceLang, targetLang);
+  if (g) return g;
+  const mm = await myMemoryTranslate(text, sourceLang === "auto" ? "en" : sourceLang, targetLang);
+  if (mm) return { translatedText: mm.translatedText, detectedLang: sourceLang };
+  return null;
 }
 
 router.post(
   "/",
   validateBody(translateSchema),
   asyncHandler(async (req: Request, res: Response) => {
-    const { text, targetLang } = req.body as { text: string; targetLang: "en" | "hi" };
+    const { text, targetLang, sourceLang } = req.body as {
+      text: string;
+      targetLang: string;
+      sourceLang: string;
+    };
     const trimmed = text.trim();
 
     if (!trimmed) {
@@ -174,99 +188,56 @@ router.post(
       });
     }
 
-    if (targetLang === "en") {
-      // 1. If Devanagari script is present, translate directly hi -> en
-      if (hasDevanagari(trimmed)) {
-        const result = await googleTranslate(trimmed, "hi", "en");
-        const translatedText = result?.translatedText || trimmed;
-        return res.json({
-          success: true,
-          originalText: text,
-          translatedText,
-          intermediateHindi: trimmed,
-          detectedSource: "hi",
-          converted: translatedText !== trimmed,
-        });
-      }
+    // Explicit Hinglish or auto-detected Hinglish -> transliterate to Hindi first, then translate to ANY targetLang!
+    const treatAsHinglish =
+      sourceLang === "hinglish" || (sourceLang === "auto" && isLikelyHinglish(trimmed));
 
-      // 2. Check if text looks like Romanized Hindi (Hinglish)
-      const hinglishDetected = isLikelyHinglish(trimmed);
-      if (hinglishDetected) {
-        const hindiScript = await transliterateToDevanagari(trimmed);
-        if (hasDevanagari(hindiScript)) {
-          const result = await googleTranslate(hindiScript, "hi", "en");
-          if (result?.translatedText) {
-            return res.json({
-              success: true,
-              originalText: text,
-              translatedText: result.translatedText,
-              intermediateHindi: hindiScript,
-              detectedSource: "hinglish",
-              converted: true,
-            });
-          }
-        }
-        const fallback = localFallbackToEnglish(trimmed);
-        return res.json({
-          success: true,
-          originalText: text,
-          translatedText: fallback,
-          detectedSource: "hinglish",
-          converted: fallback.toLowerCase() !== trimmed.toLowerCase(),
-        });
-      }
-
-      // 3. Auto-detect other scripts/languages -> English (or keep pure English intact)
-      const autoResult = await googleTranslate(trimmed, "auto", "en");
-      if (autoResult) {
-        return res.json({
-          success: true,
-          originalText: text,
-          translatedText: autoResult.translatedText,
-          detectedSource: autoResult.detectedLang || "en",
-          converted: autoResult.translatedText.toLowerCase() !== trimmed.toLowerCase(),
-        });
-      }
-
-      return res.json({
-        success: true,
-        originalText: text,
-        translatedText: trimmed,
-        detectedSource: "en",
-        converted: false,
-      });
-    }
-
-    // Target = "hi" (English / Hinglish -> Devanagari Hindi)
-    if (hasDevanagari(trimmed)) {
-      return res.json({
-        success: true,
-        originalText: text,
-        translatedText: trimmed,
-        detectedSource: "hi",
-        converted: false,
-      });
-    }
-
-    if (isLikelyHinglish(trimmed)) {
+    if (treatAsHinglish) {
       const hindiScript = await transliterateToDevanagari(trimmed);
+      if (targetLang === "hi" && hasDevanagari(hindiScript)) {
+        return res.json({
+          success: true,
+          originalText: text,
+          translatedText: hindiScript,
+          detectedSource: "hinglish",
+          converted: hindiScript !== trimmed,
+        });
+      }
+
+      if (hasDevanagari(hindiScript)) {
+        const result = await translateAny(hindiScript, "hi", targetLang);
+        if (result?.translatedText) {
+          return res.json({
+            success: true,
+            originalText: text,
+            translatedText: result.translatedText,
+            intermediateHindi: hindiScript,
+            detectedSource: "hinglish",
+            converted: true,
+          });
+        }
+      }
+    }
+
+    // Standard Any-to-Any translation (Devanagari, English, Tamil, Spanish, Arabic, etc. -> targetLang)
+    const effectiveSource = hasDevanagari(trimmed) && sourceLang === "auto" ? "hi" : sourceLang;
+    const result = await translateAny(trimmed, effectiveSource, targetLang);
+    if (result?.translatedText) {
       return res.json({
         success: true,
         originalText: text,
-        translatedText: hindiScript,
-        detectedSource: "hinglish",
-        converted: hindiScript !== trimmed,
+        translatedText: result.translatedText,
+        detectedSource: result.detectedLang || effectiveSource,
+        converted: result.translatedText.toLowerCase() !== trimmed.toLowerCase(),
       });
     }
 
-    const result = await googleTranslate(trimmed, "auto", "hi");
-    const translatedText = result?.translatedText || trimmed;
     return res.json({
       success: true,
       originalText: text,
-      translatedText,
-      detectedSource: result?.detectedLang || "en",
-      converted: translatedText !== trimmed,
+      translatedText: trimmed,
+      detectedSource: effectiveSource,
+      converted: false,
     });
   })
 );

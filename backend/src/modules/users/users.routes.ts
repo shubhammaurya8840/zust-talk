@@ -8,10 +8,13 @@ import * as controller from "./users.controller";
 const router = Router();
 router.use(requireAuth);
 router.get("/search", asyncHandler(controller.search));
+router.get("/lookup/:username", asyncHandler(controller.lookupByUsername));
+router.get("/:userId", asyncHandler(controller.getProfile));
 router.patch("/me", validateBody(z.object({
   username: z.string().min(3).max(30).regex(/^[a-zA-Z0-9_]+$/).optional(),
   displayName: z.string().min(1).max(60).optional(),
-  bio: z.string().max(160).nullable().optional()
+  bio: z.string().max(160).nullable().optional(),
+  avatarUrl: z.string().max(15000).nullable().optional()
 }).refine(v => Object.keys(v).length > 0)), asyncHandler(controller.updateMe));
 router.post("/:userId/block", asyncHandler(controller.block));
 router.delete("/:userId/block", asyncHandler(controller.unblock));

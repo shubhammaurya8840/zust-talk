@@ -44,6 +44,7 @@ model User {
   passwordHash    String?
   avatarUrl       String?
   bio             String?
+  lastSeenAt      DateTime?
   isActive        Boolean  @default(true)
   isVerified      Boolean  @default(false)
   createdAt       DateTime @default(now())
@@ -112,6 +113,7 @@ model ConversationMember {
   role           MemberRole @default(MEMBER)
   joinedAt       DateTime @default(now())
   lastReadAt     DateTime?
+  archivedAt     DateTime?
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   user           User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -128,6 +130,8 @@ model Message {
   type           MessageType @default(TEXT)
   replyToId      String?
   forwardedFromId String?
+  isViewOnce     Boolean  @default(false)
+  viewedAt       DateTime?
   editedAt       DateTime?
   deletedAt      DateTime?
   createdAt      DateTime @default(now())

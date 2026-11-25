@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Socket } from "socket.io-client";
 import { User } from "../types";
+import { UserAvatar } from "../utils/avatars";
 import {
   Phone,
   PhoneOff,
@@ -8,8 +9,8 @@ import {
   VideoOff,
   Mic,
   MicOff,
-  Maximize2,
-  Minimize2,
+  ZoomIn,
+  ZoomOut,
   SwitchCamera,
   ChevronDown,
   Volume2,
@@ -66,7 +67,8 @@ export const CallModal: React.FC<CallModalProps> = ({
   const [isFlippingCamera, setIsFlippingCamera] = useState(false);
   const [isSwapped, setIsSwapped] = useState(false);
   const [isSpeakerOn, setIsSpeakerOn] = useState(true);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  // Magnify / Zoom toggle: false = normal portrait/fit view (never over-zoomed on laptop); true = full edge-to-edge zoom fill
+  const [isZoomFill, setIsZoomFill] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [callDuration, setCallDuration] = useState(0);
 
@@ -87,10 +89,9 @@ export const CallModal: React.FC<CallModalProps> = ({
     setToastMsg(msg);
     setTimeout(() => {
       setToastMsg((curr) => (curr === msg ? null : curr));
-    }, 2600);
+    }, 2400);
   }, []);
 
-  // Synthetic ringtone AudioContext
   const ringAudioCtxRef = useRef<AudioContext | null>(null);
   const ringOscillatorRef = useRef<OscillatorNode | null>(null);
 
@@ -100,20 +101,16 @@ export const CallModal: React.FC<CallModalProps> = ({
       if (!AudioCtx) return;
       const ctx = new AudioCtx();
       ringAudioCtxRef.current = ctx;
-
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = "sine";
       osc.frequency.setValueAtTime(isIncoming ? 440 : 400, ctx.currentTime);
       gain.gain.setValueAtTime(0.06, ctx.currentTime);
-
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start();
       ringOscillatorRef.current = osc;
-    } catch {
-      // Autoplay policies may block until user interaction
-    }
+    } catch {}
   };
 
   const stopRingingSound = () => {
@@ -127,9 +124,7 @@ export const CallModal: React.FC<CallModalProps> = ({
         ringAudioCtxRef.current.close().catch(() => {});
         ringAudioCtxRef.current = null;
       }
-    } catch {
-      // Ignore cleanup errors
-    }
+    } catch {}
   };
 
   const syncStreamsToElements = useCallback(() => {
@@ -161,15 +156,7 @@ export const CallModal: React.FC<CallModalProps> = ({
 
   useEffect(() => {
     syncStreamsToElements();
-  }, [isMinimized, hasVideoMode, isVideoDisabled, isSwapped, callStatus, syncStreamsToElements]);
-
-  useEffect(() => {
-    const handleFsChange = () => {
-      setIsFullscreen(Boolean(document.fullscreenElement));
-    };
-    document.addEventListener("fullscreenchange", handleFsChange);
-    return () => document.removeEventListener("fullscreenchange", handleFsChange);
-  }, []);
+  }, [isMinimized, hasVideoMode, isVideoDisabled, isSwapped, callStatus, isZoomFill, syncStreamsToElements]);
 
   const cleanUpCall = () => {
     stopRingingSound();
@@ -258,12 +245,9 @@ export const CallModal: React.FC<CallModalProps> = ({
         audio: true,
       });
       const vTrack = stream.getVideoTracks()[0];
-      if (vTrack) {
-        activeDeviceIdRef.current = vTrack.getSettings().deviceId;
-      }
+      if (vTrack) activeDeviceIdRef.current = vTrack.getSettings().deviceId;
       return stream;
     } catch {
-      // Fallback to audio-only if camera hardware or permission is unavailable
       setIsVideoDisabled(true);
       showToast("Camera unavailable — joined with audio");
       return navigator.mediaDevices.getUserMedia({ audio: true, video: false });
@@ -279,6 +263,7 @@ export const CallModal: React.FC<CallModalProps> = ({
     setIsRemoteVideoOff(!initialVideo);
     setFacingMode("user");
     setIsSwapped(false);
+    setIsZoomFill(false);
     setCallStatus("RINGING");
     setCallDuration(0);
     setStatusMessage(
@@ -319,7 +304,6 @@ export const CallModal: React.FC<CallModalProps> = ({
 
     const handleCallSignal = async ({ signal }: { signal: any }) => {
       if (!signal) return;
-
       if (signal.type === "camera-state") {
         setIsRemoteVideoOff(!signal.enabled);
         if (signal.enabled) setHasVideoMode(true);
@@ -408,8 +392,7 @@ export const CallModal: React.FC<CallModalProps> = ({
         isVideo: wantVideo,
         conversationId: callState?.conversationId,
       });
-    } catch (err) {
-      console.error("Failed to access media devices for outgoing call:", err);
+    } catch {
       setStatusMessage("Could not access microphone/camera.");
       setTimeout(() => {
         cleanUpCall();
@@ -432,8 +415,7 @@ export const CallModal: React.FC<CallModalProps> = ({
       createPeerConnection(stream);
 
       socket?.emit("call:accept", { toUserId: otherUser?.id });
-    } catch (err) {
-      console.error("Failed to access media devices on accept:", err);
+    } catch {
       handleDeclineCall();
     }
   };
@@ -462,7 +444,6 @@ export const CallModal: React.FC<CallModalProps> = ({
     }
   };
 
-  // Turn Camera ON or OFF (supports turning on camera even if initially audio-only or disabled)
   const handleToggleVideo = async () => {
     if (!localStreamRef.current) return;
 
@@ -481,14 +462,9 @@ export const CallModal: React.FC<CallModalProps> = ({
       return;
     }
 
-    // No live video track yet — acquire camera and upgrade the PeerConnection!
     try {
       const camStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: facingMode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
+        video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false,
       });
       const newTrack = camStream.getVideoTracks()[0];
@@ -499,7 +475,6 @@ export const CallModal: React.FC<CallModalProps> = ({
       setHasVideoMode(true);
       setIsVideoDisabled(false);
 
-      // Re-attach srcObject so local video element refreshes
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = null;
         localVideoRef.current.srcObject = localStreamRef.current;
@@ -516,10 +491,7 @@ export const CallModal: React.FC<CallModalProps> = ({
           if (callStatus === "CONNECTED" && otherUser) {
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
-            socket?.emit("call:signal", {
-              toUserId: otherUser.id,
-              signal: offer,
-            });
+            socket?.emit("call:signal", { toUserId: otherUser.id, signal: offer });
           }
         }
       }
@@ -533,10 +505,8 @@ export const CallModal: React.FC<CallModalProps> = ({
     }
   };
 
-  // Flip between Front ('user') and Back ('environment') camera seamlessly
   const handleFlipCamera = async () => {
     if (!localStreamRef.current || isFlippingCamera) return;
-
     setIsFlippingCamera(true);
     const nextFacing: "user" | "environment" = facingMode === "user" ? "environment" : "user";
 
@@ -544,26 +514,18 @@ export const CallModal: React.FC<CallModalProps> = ({
       const oldTracks = localStreamRef.current.getVideoTracks();
       const oldDeviceId = oldTracks[0]?.getSettings().deviceId || activeDeviceIdRef.current;
 
-      // Stop old tracks first so mobile devices release camera hardware cleanly
       oldTracks.forEach((t) => {
         t.stop();
         localStreamRef.current?.removeTrack(t);
       });
 
       let newStream: MediaStream | null = null;
-
-      // 1. Try exact facingMode ('environment' or 'user')
       try {
         newStream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { exact: nextFacing },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
+          video: { facingMode: { exact: nextFacing }, width: { ideal: 1280 }, height: { ideal: 720 } },
           audio: false,
         });
       } catch {
-        // 2. Fallback: enumerate video devices and switch to another deviceId
         try {
           const devices = await navigator.mediaDevices.enumerateDevices();
           const cameras = devices.filter((d) => d.kind === "videoinput");
@@ -571,26 +533,15 @@ export const CallModal: React.FC<CallModalProps> = ({
             const currentIndex = cameras.findIndex((c) => c.deviceId === oldDeviceId);
             const nextCam = cameras[(currentIndex + 1) % cameras.length];
             newStream = await navigator.mediaDevices.getUserMedia({
-              video: {
-                deviceId: { exact: nextCam.deviceId },
-                width: { ideal: 1280 },
-                height: { ideal: 720 },
-              },
+              video: { deviceId: { exact: nextCam.deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } },
               audio: false,
             });
           } else {
-            // Single camera: re-acquire previous camera and notify user
-            newStream = await navigator.mediaDevices.getUserMedia({
-              video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-              audio: false,
-            });
-            showToast("Only one camera available on this device");
+            newStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            showToast("Only one camera available");
           }
         } catch {
-          newStream = await navigator.mediaDevices.getUserMedia({
-            video: true,
-            audio: false,
-          });
+          newStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
           showToast("Could not switch camera");
         }
       }
@@ -601,9 +552,7 @@ export const CallModal: React.FC<CallModalProps> = ({
       activeDeviceIdRef.current = newTrack.getSettings().deviceId;
       const detectedFacing = newTrack.getSettings().facingMode;
       const resolvedFacing: "user" | "environment" =
-        detectedFacing === "environment" || detectedFacing === "user"
-          ? detectedFacing
-          : nextFacing;
+        detectedFacing === "environment" || detectedFacing === "user" ? detectedFacing : nextFacing;
 
       localStreamRef.current.addTrack(newTrack);
       setFacingMode(resolvedFacing);
@@ -626,10 +575,7 @@ export const CallModal: React.FC<CallModalProps> = ({
           if (callStatus === "CONNECTED" && otherUser) {
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
-            socket?.emit("call:signal", {
-              toUserId: otherUser.id,
-              signal: offer,
-            });
+            socket?.emit("call:signal", { toUserId: otherUser.id, signal: offer });
           }
         }
       }
@@ -638,8 +584,7 @@ export const CallModal: React.FC<CallModalProps> = ({
         toUserId: otherUser?.id,
         signal: { type: "camera-state", enabled: true },
       });
-
-      showToast(resolvedFacing === "environment" ? "Switched to Back Camera" : "Switched to Front Camera");
+      showToast(resolvedFacing === "environment" ? "Back Camera" : "Front Camera");
     } catch {
       showToast("Failed to flip camera");
     } finally {
@@ -647,27 +592,22 @@ export const CallModal: React.FC<CallModalProps> = ({
     }
   };
 
-  const handleToggleBrowserFullscreen = async () => {
-    try {
-      if (!document.fullscreenElement && containerRef.current?.requestFullscreen) {
-        await containerRef.current.requestFullscreen();
-      } else if (document.fullscreenElement && document.exitFullscreen) {
-        await document.exitFullscreen();
-      }
-    } catch {
-      // Some iOS mobile browsers restrict Fullscreen API; layout is already 100dvh full screen
+  // Magnify toggle: switches between Portrait/Fit (no zoom crop on laptop!) and Full Zoomed Fill
+  const handleToggleZoom = async () => {
+    const nextZoom = !isZoomFill;
+    setIsZoomFill(nextZoom);
+    if (nextZoom && containerRef.current?.requestFullscreen && !document.fullscreenElement) {
+      containerRef.current.requestFullscreen().catch(() => {});
+    } else if (!nextZoom && document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
     }
   };
 
   const handleToggleSpeaker = () => {
     const next = !isSpeakerOn;
     setIsSpeakerOn(next);
-    if (remoteAudioRef.current) {
-      remoteAudioRef.current.muted = !next;
-    }
-    if (remoteVideoRef.current) {
-      remoteVideoRef.current.muted = !next;
-    }
+    if (remoteAudioRef.current) remoteAudioRef.current.muted = !next;
+    if (remoteVideoRef.current) remoteVideoRef.current.muted = !next;
   };
 
   const formatDuration = (seconds: number) => {
@@ -679,14 +619,9 @@ export const CallModal: React.FC<CallModalProps> = ({
   if (!callState || !otherUser) return null;
 
   const displayName = otherUser.displayName || otherUser.username;
-  const initials = displayName[0]?.toUpperCase() || "U";
 
-  // Keep audio element always mounted so voice/video calls never lose audio when minimized
-  const hiddenAudioElement = (
-    <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
-  );
+  const hiddenAudioElement = <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />;
 
-  // Minimized floating pill view (triggered on Back button press or Minimize button)
   if (isMinimized) {
     return (
       <>
@@ -725,62 +660,62 @@ export const CallModal: React.FC<CallModalProps> = ({
     >
       {hiddenAudioElement}
 
-      {/* Full-Screen Media Canvas */}
+      {/* Media Arena: Portrait/Fit on laptop by default, Full-Zoom Fill when Magnify toggled */}
       <div className="relative flex-1 w-full h-full overflow-hidden bg-slate-950 flex items-center justify-center">
-        {/* Main Full-Screen Stream (Remote by default, or Local when swapped) */}
         {hasVideoMode ? (
           <>
-            <video
-              ref={isSwapped ? localVideoRef : remoteVideoRef}
-              autoPlay
-              playsInline
-              muted={isSwapped || !isSpeakerOn}
-              className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
-                isSwapped
-                  ? !isVideoDisabled
-                    ? `opacity-100 ${facingMode === "user" ? "mirror" : ""}`
-                    : "opacity-0"
-                  : callStatus === "CONNECTED" && !isRemoteVideoOff
-                  ? "opacity-100"
-                  : "opacity-0"
+            <div
+              className={`relative flex items-center justify-center overflow-hidden transition-all duration-300 ${
+                isZoomFill
+                  ? "w-full h-full"
+                  : "w-full h-full md:w-[440px] md:max-w-[90vw] md:h-[82dvh] md:rounded-3xl md:border md:border-white/15 md:shadow-2xl bg-black"
               }`}
-            />
+            >
+              <video
+                ref={isSwapped ? localVideoRef : remoteVideoRef}
+                autoPlay
+                playsInline
+                muted={isSwapped || !isSpeakerOn}
+                className={`w-full h-full transition-opacity duration-300 ${
+                  isZoomFill ? "object-cover" : "object-contain md:object-cover"
+                } ${
+                  isSwapped
+                    ? !isVideoDisabled
+                      ? `opacity-100 ${facingMode === "user" ? "mirror" : ""}`
+                      : "opacity-0"
+                    : callStatus === "CONNECTED" && !isRemoteVideoOff
+                    ? "opacity-100"
+                    : "opacity-0"
+                }`}
+              />
 
-            {/* Placeholder when main video is ringing or camera is off */}
-            {((!isSwapped && (callStatus !== "CONNECTED" || isRemoteVideoOff)) ||
-              (isSwapped && isVideoDisabled)) && (
-              <div className="relative z-10 flex flex-col items-center space-y-4 px-6 text-center">
-                <div className="relative">
-                  {callStatus === "RINGING" && (
-                    <>
-                      <div className="absolute -inset-4 rounded-full bg-emerald-500/20 animate-ping" />
-                      <div className="absolute -inset-8 rounded-full border border-emerald-500/25 animate-pulse" />
-                    </>
-                  )}
-                  <div className="w-28 h-28 sm:w-32 sm:h-32 rounded-full bg-gradient-to-tr from-emerald-500 via-teal-500 to-cyan-500 text-white flex items-center justify-center text-4xl font-bold shadow-2xl ring-4 ring-white/15">
-                    {isSwapped ? currentUser.displayName?.[0]?.toUpperCase() || currentUser.username[0].toUpperCase() : initials}
+              {((!isSwapped && (callStatus !== "CONNECTED" || isRemoteVideoOff)) ||
+                (isSwapped && isVideoDisabled)) && (
+                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center space-y-4 px-6 text-center bg-slate-900/70">
+                  <UserAvatar
+                    name={isSwapped ? currentUser.displayName : displayName}
+                    username={isSwapped ? currentUser.username : otherUser.username}
+                    avatarUrl={isSwapped ? currentUser.avatarUrl : otherUser.avatarUrl}
+                    size="xl"
+                    className="ring-4 ring-white/15"
+                  />
+                  <div>
+                    <h3 className="text-xl font-bold text-white">
+                      {isSwapped ? "You" : displayName}
+                    </h3>
+                    <p className="text-xs text-emerald-300 mt-1 font-medium">
+                      {callStatus === "CONNECTED" ? "Camera is off" : statusMessage}
+                    </p>
                   </div>
                 </div>
-                <div>
-                  <h3 className="text-2xl font-bold tracking-tight text-white">
-                    {isSwapped ? "You" : displayName}
-                  </h3>
-                  <p className="text-sm text-emerald-300/90 mt-1 font-medium">
-                    {callStatus === "CONNECTED"
-                      ? isSwapped
-                        ? "Your camera is off"
-                        : "Camera is off"
-                      : statusMessage}
-                  </p>
-                </div>
-              </div>
-            )}
+              )}
+            </div>
 
-            {/* Floating Picture-in-Picture (Local by default, or Remote when swapped) */}
+            {/* Floating PiP */}
             <div
               onClick={() => setIsSwapped((prev) => !prev)}
               title="Tap to swap screen"
-              className="absolute bottom-28 sm:bottom-32 right-4 z-20 w-28 h-40 sm:w-40 sm:h-56 rounded-2xl overflow-hidden shadow-2xl border-2 border-white/25 bg-slate-900 cursor-pointer group transition-all hover:scale-[1.03]"
+              className="absolute bottom-28 sm:bottom-32 right-4 z-20 w-24 h-36 sm:w-36 sm:h-52 rounded-2xl overflow-hidden shadow-2xl border-2 border-white/25 bg-slate-900 cursor-pointer transition-transform hover:scale-[1.03]"
             >
               <video
                 ref={isSwapped ? remoteVideoRef : localVideoRef}
@@ -801,17 +736,16 @@ export const CallModal: React.FC<CallModalProps> = ({
               {((!isSwapped && isVideoDisabled) ||
                 (isSwapped && (callStatus !== "CONNECTED" || isRemoteVideoOff))) && (
                 <div className="w-full h-full flex flex-col items-center justify-center bg-slate-800/90 p-2 text-center">
-                  <div className="w-11 h-11 rounded-full bg-slate-700 flex items-center justify-center text-white font-bold text-sm">
-                    {isSwapped
-                      ? initials
-                      : currentUser.displayName?.[0]?.toUpperCase() ||
-                        currentUser.username[0].toUpperCase()}
-                  </div>
+                  <UserAvatar
+                    name={isSwapped ? displayName : currentUser.displayName}
+                    username={isSwapped ? otherUser.username : currentUser.username}
+                    avatarUrl={isSwapped ? otherUser.avatarUrl : currentUser.avatarUrl}
+                    size="sm"
+                  />
                   <span className="text-[10px] text-slate-400 mt-1.5">Camera Off</span>
                 </div>
               )}
 
-              {/* Quick Flip Camera Icon directly on Local PiP */}
               {!isSwapped && !isVideoDisabled && (
                 <button
                   type="button"
@@ -825,50 +759,32 @@ export const CallModal: React.FC<CallModalProps> = ({
                   <SwitchCamera className={`w-3.5 h-3.5 ${isFlippingCamera ? "animate-spin" : ""}`} />
                 </button>
               )}
-
-              <div className="absolute bottom-1.5 left-2 right-2 flex items-center justify-between pointer-events-none">
-                <span className="text-[10px] font-semibold bg-black/50 backdrop-blur-sm px-2 py-0.5 rounded-full text-white/90">
-                  {isSwapped ? displayName.split(" ")[0] : "You"}
-                </span>
-              </div>
             </div>
           </>
         ) : (
-          /* Audio Call Full-Screen Arena */
-          <div className="relative z-10 flex flex-col items-center justify-center space-y-6 p-8 text-center">
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(16,185,129,0.16),transparent_65%)] pointer-events-none" />
-            <div className="relative">
-              {callStatus === "RINGING" && (
-                <>
-                  <div className="absolute -inset-4 rounded-full bg-emerald-500/20 animate-ping" />
-                  <div className="absolute -inset-8 rounded-full border border-emerald-500/30 animate-pulse" />
-                </>
-              )}
-              {callStatus === "CONNECTED" && (
-                <div className="absolute -inset-4 rounded-full border-2 border-emerald-500/40 animate-spin [animation-duration:10s]" />
-              )}
-              <div className="w-32 h-32 sm:w-36 sm:h-36 rounded-full bg-gradient-to-tr from-emerald-600 via-teal-500 to-cyan-500 text-white flex items-center justify-center text-5xl font-bold shadow-2xl ring-8 ring-emerald-500/20">
-                {initials}
-              </div>
-            </div>
-
+          <div className="relative z-10 flex flex-col items-center justify-center space-y-5 p-8 text-center">
+            <UserAvatar
+              name={displayName}
+              username={otherUser.username}
+              avatarUrl={otherUser.avatarUrl}
+              size="xl"
+              className="ring-8 ring-emerald-500/20"
+            />
             <div>
-              <h3 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
-                {displayName}
-              </h3>
+              <h3 className="text-2xl font-bold text-white tracking-tight">{displayName}</h3>
               <p className="text-sm font-medium text-emerald-400 mt-1.5">{statusMessage}</p>
             </div>
           </div>
         )}
 
-        {/* Top Floating Header Overlay */}
-        <div className="absolute top-0 inset-x-0 z-30 px-4 sm:px-6 pt-[max(1rem,env(safe-area-inset-top))] pb-8 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-between">
+        {/* Top Floating Header */}
+        <div className="absolute top-0 inset-x-0 z-30 px-4 sm:px-6 pt-[max(1rem,env(safe-area-inset-top))] pb-6 bg-gradient-to-b from-black/75 to-transparent flex items-center justify-between">
           <div className="flex items-center space-x-3">
             {onMinimize && (
               <button
                 type="button"
                 onClick={onMinimize}
-                title="Minimize Call (Keep talking while chatting)"
+                title="Minimize Call"
                 className="p-2.5 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-md text-white transition-colors"
               >
                 <ChevronDown className="w-5 h-5" />
@@ -888,46 +804,46 @@ export const CallModal: React.FC<CallModalProps> = ({
                 <span className="text-sm sm:text-base font-bold text-white">{displayName}</span>
               </div>
               <p className="text-[11px] text-slate-300 font-medium pl-4">
-                {hasVideoMode ? "HD Video Call" : "Voice Call"}
+                {hasVideoMode ? "Video Call" : "Audio Call"}
                 {callStatus === "CONNECTED" ? ` • ${formatDuration(callDuration)}` : ""}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
-            {hasVideoMode && !isVideoDisabled && (
-              <span className="hidden sm:inline-flex items-center px-2.5 py-1 rounded-full bg-white/10 backdrop-blur-md text-[11px] text-slate-200 font-medium">
-                {facingMode === "user" ? "Front Cam" : "Back Cam"}
-              </span>
-            )}
+          {/* Magnify / Zoom Toggle Button */}
+          {hasVideoMode && (
             <button
               type="button"
-              onClick={handleToggleBrowserFullscreen}
-              title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
-              className="p-2.5 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-md text-white transition-colors"
+              onClick={handleToggleZoom}
+              title={isZoomFill ? "Portrait / Fit View" : "Magnify Full Screen"}
+              className={`p-2.5 rounded-full backdrop-blur-md transition-colors flex items-center space-x-1.5 ${
+                isZoomFill ? "bg-emerald-500 text-white" : "bg-white/15 hover:bg-white/25 text-white"
+              }`}
             >
-              {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+              {isZoomFill ? <ZoomOut className="w-4 h-4" /> : <ZoomIn className="w-4 h-4" />}
+              <span className="text-[11px] font-semibold hidden sm:inline">
+                {isZoomFill ? "Portrait Fit" : "Full Zoom"}
+              </span>
             </button>
-          </div>
+          )}
         </div>
 
-        {/* Non-blocking Camera / Call Toast */}
         {toastMsg && (
           <div className="absolute top-20 left-1/2 -translate-x-1/2 z-40 px-4 py-1.5 rounded-full bg-black/75 backdrop-blur-md border border-white/15 text-xs font-medium text-white shadow-lg animate-fadeIn">
             {toastMsg}
           </div>
         )}
 
-        {/* Bottom Floating Control Dock */}
-        <div className="absolute bottom-0 inset-x-0 z-30 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-8 px-4 bg-gradient-to-t from-black/85 via-black/45 to-transparent flex justify-center">
+        {/* Bottom Dock */}
+        <div className="absolute bottom-0 inset-x-0 z-30 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-6 px-4 bg-gradient-to-t from-black/80 to-transparent flex justify-center">
           {callState.isIncoming && callStatus === "RINGING" ? (
-            <div className="flex items-center space-x-10 px-8 py-4 rounded-3xl bg-slate-900/75 backdrop-blur-xl border border-white/15 shadow-2xl">
+            <div className="flex items-center space-x-10 px-8 py-4 rounded-3xl bg-slate-900/80 backdrop-blur-xl border border-white/15 shadow-2xl">
               <button
                 type="button"
                 onClick={handleDeclineCall}
                 className="flex flex-col items-center space-y-1.5 group"
               >
-                <div className="w-14 h-14 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center shadow-lg shadow-red-600/40 transition-transform group-hover:scale-105">
+                <div className="w-14 h-14 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center shadow-lg">
                   <PhoneOff className="w-6 h-6" />
                 </div>
                 <span className="text-xs font-medium text-slate-300">Decline</span>
@@ -938,73 +854,77 @@ export const CallModal: React.FC<CallModalProps> = ({
                 onClick={handleAcceptCall}
                 className="flex flex-col items-center space-y-1.5 group"
               >
-                <div className="w-14 h-14 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white flex items-center justify-center shadow-lg shadow-emerald-500/40 transition-transform group-hover:scale-105 animate-bounce">
+                <div className="w-14 h-14 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white flex items-center justify-center shadow-lg animate-bounce">
                   {hasVideoMode ? <Video className="w-6 h-6" /> : <Phone className="w-6 h-6" />}
                 </div>
                 <span className="text-xs font-medium text-emerald-300">Accept</span>
               </button>
             </div>
           ) : (
-            <div className="flex items-center space-x-3 sm:space-x-4 px-5 py-3.5 rounded-3xl bg-slate-900/75 backdrop-blur-xl border border-white/15 shadow-2xl">
-              {/* Speaker Toggle */}
+            <div className="flex items-center space-x-2.5 sm:space-x-4 px-4 sm:px-5 py-3 rounded-3xl bg-slate-900/80 backdrop-blur-xl border border-white/15 shadow-2xl">
               <button
                 type="button"
                 onClick={handleToggleSpeaker}
-                title={isSpeakerOn ? "Mute Audio Output" : "Enable Speaker"}
-                className={`p-3.5 rounded-2xl transition-all ${
-                  !isSpeakerOn
-                    ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
-                    : "bg-white/10 hover:bg-white/20 text-white"
+                title={isSpeakerOn ? "Mute Audio" : "Speaker"}
+                className={`p-3 rounded-2xl transition-all ${
+                  !isSpeakerOn ? "bg-amber-500/20 text-amber-400" : "bg-white/10 hover:bg-white/20 text-white"
                 }`}
               >
                 {isSpeakerOn ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
               </button>
 
-              {/* Mic Toggle */}
               <button
                 type="button"
                 onClick={handleToggleMute}
-                title={isMuted ? "Unmute Microphone" : "Mute Microphone"}
-                className={`p-3.5 rounded-2xl transition-all ${
-                  isMuted
-                    ? "bg-red-500/25 text-red-400 border border-red-500/40"
-                    : "bg-white/10 hover:bg-white/20 text-white"
+                title={isMuted ? "Unmute" : "Mute"}
+                className={`p-3 rounded-2xl transition-all ${
+                  isMuted ? "bg-red-500/25 text-red-400" : "bg-white/10 hover:bg-white/20 text-white"
                 }`}
               >
                 {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
               </button>
 
-              {/* Camera On / Off Toggle (Always available — can turn on camera anytime!) */}
               <button
                 type="button"
                 onClick={handleToggleVideo}
                 title={isVideoDisabled ? "Turn On Camera" : "Turn Off Camera"}
-                className={`p-3.5 rounded-2xl transition-all ${
+                className={`p-3 rounded-2xl transition-all ${
                   isVideoDisabled
-                    ? "bg-red-500/25 text-red-400 border border-red-500/40"
-                    : "bg-emerald-500/25 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/35"
+                    ? "bg-red-500/25 text-red-400"
+                    : "bg-emerald-500/25 text-emerald-300 border border-emerald-500/40"
                 }`}
               >
                 {isVideoDisabled ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
               </button>
 
-              {/* Flip Front / Back Camera Button */}
               <button
                 type="button"
                 onClick={handleFlipCamera}
                 disabled={isFlippingCamera}
-                title="Flip Front / Back Camera"
-                className="p-3.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white transition-all disabled:opacity-50"
+                title="Flip Camera"
+                className="p-3 rounded-2xl bg-white/10 hover:bg-white/20 text-white transition-all disabled:opacity-50"
               >
                 <SwitchCamera className={`w-5 h-5 ${isFlippingCamera ? "animate-spin" : ""}`} />
               </button>
 
-              {/* Hang Up */}
+              {hasVideoMode && (
+                <button
+                  type="button"
+                  onClick={handleToggleZoom}
+                  title={isZoomFill ? "Portrait Fit" : "Magnify Full Screen"}
+                  className={`p-3 rounded-2xl transition-all ${
+                    isZoomFill ? "bg-emerald-500 text-white" : "bg-white/10 hover:bg-white/20 text-white"
+                  }`}
+                >
+                  {isZoomFill ? <ZoomOut className="w-5 h-5" /> : <ZoomIn className="w-5 h-5" />}
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={handleHangUp}
                 title="End Call"
-                className="p-3.5 px-5 rounded-2xl bg-red-600 hover:bg-red-700 text-white flex items-center justify-center shadow-lg shadow-red-600/40 transition-transform hover:scale-105"
+                className="p-3 px-4 sm:px-5 rounded-2xl bg-red-600 hover:bg-red-700 text-white flex items-center justify-center shadow-lg shadow-red-600/40"
               >
                 <PhoneOff className="w-5 h-5" />
               </button>

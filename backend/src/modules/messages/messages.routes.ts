@@ -12,7 +12,8 @@ router.post("/", validateBody(z.object({
   conversationId: z.string().uuid(),
   body: z.string().max(10000).optional(),
   ciphertext: z.string().max(20000).optional(),
-  type: z.enum(["TEXT", "IMAGE", "VIDEO", "DOCUMENT", "VOICE"]).default("TEXT"),
+  type: z.enum(["TEXT", "IMAGE", "VIDEO", "DOCUMENT", "VOICE", "SYSTEM"]).default("TEXT"),
+  isViewOnce: z.boolean().optional(),
   replyToId: z.string().uuid().optional(),
   attachments: z.array(z.object({
     originalName: z.string().min(1),
@@ -24,5 +25,6 @@ router.post("/", validateBody(z.object({
 router.patch("/:messageId", validateBody(z.object({ body: z.string().min(1).max(10000) })), asyncHandler(controller.edit));
 router.delete("/:messageId", asyncHandler(controller.remove));
 router.post("/:messageId/read", asyncHandler(controller.markRead));
+router.post("/:messageId/view-once", asyncHandler(controller.openViewOnce));
 router.post("/conversation/:conversationId/read", asyncHandler(controller.markConversationRead));
 export default router;

@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Conversation, User } from "../types";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api/client";
+import { UserAvatar } from "../utils/avatars";
 import { X, Users, UserPlus, Trash2, LogOut, ShieldCheck, Crown, Edit2, Check } from "lucide-react";
 
 interface GroupInfoDrawerProps {
@@ -9,6 +10,7 @@ interface GroupInfoDrawerProps {
   onClose: () => void;
   conversation: Conversation;
   onUpdate: () => void;
+  onViewMember?: (memberUser: User) => void;
 }
 
 export const GroupInfoDrawer: React.FC<GroupInfoDrawerProps> = ({
@@ -16,6 +18,7 @@ export const GroupInfoDrawer: React.FC<GroupInfoDrawerProps> = ({
   onClose,
   conversation,
   onUpdate,
+  onViewMember,
 }) => {
   const { user } = useAuth();
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -238,10 +241,18 @@ export const GroupInfoDrawer: React.FC<GroupInfoDrawerProps> = ({
                 const isMe = m.userId === user?.id;
                 return (
                   <div key={m.id} className="flex items-center justify-between py-1.5">
-                    <div className="flex items-center space-x-2.5">
-                      <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 flex items-center justify-center font-bold text-xs">
-                        {m.user?.displayName?.[0]?.toUpperCase() || m.user?.username?.[0]?.toUpperCase() || "U"}
-                      </div>
+                    <div
+                      onClick={() => m.user && !isMe && onViewMember?.(m.user)}
+                      className={`flex items-center space-x-2.5 ${!isMe && m.user && onViewMember ? "cursor-pointer hover:opacity-80" : ""}`}
+                    >
+                      <UserAvatar
+                        name={m.user?.displayName}
+                        username={m.user?.username}
+                        avatarUrl={m.user?.avatarUrl}
+                        size="sm"
+                        isOnline={m.user?.isOnline}
+                        showOnlineDot
+                      />
                       <div>
                         <p className="text-xs font-semibold text-slate-800 dark:text-slate-100">
                           {m.user?.displayName || m.user?.username} {isMe && "(You)"}

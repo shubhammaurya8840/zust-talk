@@ -6,6 +6,8 @@ export interface User {
   phone?: string | null;
   avatarUrl?: string | null;
   bio?: string | null;
+  lastSeenAt?: string | null;
+  isOnline?: boolean;
   createdAt?: string;
 }
 
@@ -33,7 +35,9 @@ export interface Message {
   senderId: string;
   body?: string | null;
   ciphertext?: string | null;
-  type: 'TEXT' | 'IMAGE' | 'VIDEO' | 'DOCUMENT' | 'VOICE';
+  type: 'TEXT' | 'IMAGE' | 'VIDEO' | 'DOCUMENT' | 'VOICE' | 'SYSTEM';
+  isViewOnce?: boolean;
+  viewedAt?: string | null;
   replyToId?: string | null;
   editedAt?: string | null;
   deletedAt?: string | null;
@@ -55,6 +59,7 @@ export interface ConversationMember {
   role: 'MEMBER' | 'ADMIN' | 'OWNER';
   joinedAt: string;
   lastReadAt?: string | null;
+  archivedAt?: string | null;
   user?: User;
 }
 

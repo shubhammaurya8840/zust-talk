@@ -1,18 +1,23 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Conversation, Message } from "../types";
+import { Conversation, Message, User } from "../types";
 import { useAuth } from "../context/AuthContext";
 import { useSocket } from "../context/SocketContext";
 import { api, getFullUrl } from "../api/client";
 import { Language, translations } from "../utils/i18n";
 import { useBackLayer } from "../utils/useBackNavigation";
+import { UserAvatar } from "../utils/avatars";
+import { formatLastSeen } from "../utils/presence";
+import { TARGET_LANGUAGES, SOURCE_LANGUAGES, smartTranslate } from "../utils/translate";
 import { ReportModal } from "./ReportModal";
 import { E2EEModal } from "./E2EEModal";
 import { ForwardModal } from "./ForwardModal";
+import { CameraModal } from "./CameraModal";
 import {
   ArrowLeft,
   ArrowDown,
   Send,
   Paperclip,
+  Camera,
   Check,
   CheckCheck,
   Edit2,
@@ -32,10 +37,9 @@ import {
   Phone,
   Video,
   Languages,
-  Sparkles,
+  Eye,
+  Archive,
 } from "lucide-react";
-
-type SendLangMode = "ORIGINAL" | "EN" | "HI";
 
 const QUICK_EMOJIS = [
   "😀", "😂", "❤️", "🙏", "🔥", "👍",
@@ -50,6 +54,9 @@ interface ChatAreaProps {
   onToggleInfo: () => void;
   onConversationUpdated: () => void;
   onStartCall?: (isVideo: boolean) => void;
+  onStartGroupCall?: (isVideo: boolean) => void;
+  onViewProfile?: (user: User) => void;
+  onToggleArchive?: (conversationId: string, archived: boolean) => void;
   lang?: Language;
 }
 
@@ -60,10 +67,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onToggleInfo,
   onConversationUpdated,
   onStartCall,
+  onStartGroupCall,
+  onViewProfile,
+  onToggleArchive,
   lang = "en",
 }) => {
   const { user } = useAuth();
-  const { socket } = useSocket();
+  const { socket, presenceMap } = useSocket();
   const t = translations[lang];
 
   const [messages, setMessages] = useState<Message[]>([]);
@@ -71,6 +81,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [loading, setLoading] = useState(true);
   const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isViewOnceSelected, setIsViewOnceSelected] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [editBody, setEditBody] = useState("");
@@ -82,16 +93,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [isBlocked, setIsBlocked] = useState(false);
   const [showScrollDown, setShowScrollDown] = useState(false);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [viewOnceUrl, setViewOnceUrl] = useState<string | null>(null);
+  const [isWindowBlurred, setIsWindowBlurred] = useState(false);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
 
-  // Smart Hindi -> English Auto-Convert on Send
-  const [sendLang, setSendLang] = useState<SendLangMode>(() => {
-    const saved = localStorage.getItem("zust_send_lang");
-    return saved === "EN" || saved === "HI" ? saved : "ORIGINAL";
-  });
+  // Any-to-Any Language Translation Mode
+  const [sourceLang, setSourceLang] = useState<string>(() => localStorage.getItem("zust_src_lang") || "auto");
+  const [targetLang, setTargetLang] = useState<string>(() => localStorage.getItem("zust_tgt_lang") || "ORIGINAL");
   const [liveTranslation, setLiveTranslation] = useState<string>("");
   const [isTranslatingPreview, setIsTranslatingPreview] = useState(false);
+  const [translatedBubbles, setTranslatedBubbles] = useState<Record<string, string>>({});
   const [sendToast, setSendToast] = useState<string | null>(null);
-  const translationCacheRef = useRef<{ source: string; mode: SendLangMode; result: string } | null>(null);
+  const translationCacheRef = useRef<{ source: string; srcLang: string; tgtLang: string; result: string } | null>(null);
 
   // Modals state
   const [isReportOpen, setIsReportOpen] = useState(false);
@@ -109,8 +122,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastAlertSentRef = useRef<number>(0);
 
-  // Register overlays with Browser Back Button navigation
+  // Back Button handlers
+  useBackLayer("chat-camera", 105, isCameraOpen, () => setIsCameraOpen(false));
+  useBackLayer("chat-viewonce", 102, Boolean(viewOnceUrl), () => setViewOnceUrl(null));
   useBackLayer("chat-lightbox", 100, Boolean(previewImageUrl), () => setPreviewImageUrl(null));
   useBackLayer("chat-menu", 80, menuOpen, () => setMenuOpen(false));
   useBackLayer("chat-emoji", 80, emojiOpen, () => setEmojiOpen(false));
@@ -128,10 +144,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       ? conversation.members.find((m) => m.userId !== user?.id)?.user
       : undefined;
 
+  const myMembership = conversation.members.find((m) => m.userId === user?.id);
+  const isArchived = Boolean(myMembership?.archivedAt);
+
   const title =
     conversation.type === "GROUP"
       ? conversation.title || "Group Chat"
       : otherMember?.displayName || otherMember?.username || "Chat";
+
+  const livePresence = otherMember ? presenceMap[otherMember.id] : undefined;
+  const isOtherOnline = livePresence ? livePresence.isOnline : Boolean(otherMember?.isOnline);
+  const otherLastSeen = livePresence?.lastSeenAt ?? otherMember?.lastSeenAt;
 
   const showNotice = (msg: string) => {
     setSendToast(msg);
@@ -140,19 +163,72 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }, 2400);
   };
 
-  const handleChangeSendLang = (mode: SendLangMode) => {
-    setSendLang(mode);
-    localStorage.setItem("zust_send_lang", mode);
-    translationCacheRef.current = null;
-    if (mode === "ORIGINAL") {
-      setLiveTranslation("");
-    }
+  const triggerSecurityAlert = (kind: "screenshot" | "screen_record") => {
+    const now = Date.now();
+    if (now - lastAlertSentRef.current < 3000) return;
+    lastAlertSentRef.current = now;
+    socket?.emit("chat:security_alert", { conversationId: conversation.id, kind });
   };
 
-  // Debounced live preview when English (or Hindi) conversion mode is selected
+  // Screenshot & Screen Recording Detection + View-Once Blur Protection
+  useEffect(() => {
+    const handleKeyUp = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase();
+      const isPrintScreen = e.key === "PrintScreen" || e.code === "PrintScreen";
+      const isMacScreenshot = e.metaKey && e.shiftKey && ["3", "4", "5"].includes(key);
+      const isWinSnip = e.metaKey && e.shiftKey && key === "s";
+      if (isPrintScreen || isMacScreenshot || isWinSnip) {
+        triggerSecurityAlert("screenshot");
+      }
+    };
+
+    const handleBlur = () => setIsWindowBlurred(true);
+    const handleFocus = () => setIsWindowBlurred(false);
+    const handleVis = () => setIsWindowBlurred(document.visibilityState === "hidden");
+
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", handleBlur);
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVis);
+
+    // Intercept browser getDisplayMedia (screen recording) while chat is active
+    const md = navigator.mediaDevices as MediaDevices & { getDisplayMedia?: (...args: any[]) => Promise<MediaStream> };
+    const origGetDisplayMedia = md?.getDisplayMedia?.bind(md);
+    if (md && origGetDisplayMedia) {
+      md.getDisplayMedia = async (...args: any[]) => {
+        triggerSecurityAlert("screen_record");
+        return origGetDisplayMedia(...args);
+      };
+    }
+
+    return () => {
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", handleBlur);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVis);
+      if (md && origGetDisplayMedia) {
+        md.getDisplayMedia = origGetDisplayMedia;
+      }
+    };
+  }, [conversation.id, socket]);
+
+  const handleChangeSourceLang = (code: string) => {
+    setSourceLang(code);
+    localStorage.setItem("zust_src_lang", code);
+    translationCacheRef.current = null;
+  };
+
+  const handleChangeTargetLang = (code: string) => {
+    setTargetLang(code);
+    localStorage.setItem("zust_tgt_lang", code);
+    translationCacheRef.current = null;
+    if (code === "ORIGINAL") setLiveTranslation("");
+  };
+
+  // Debounced live translation preview
   useEffect(() => {
     const trimmed = inputText.trim();
-    if (sendLang === "ORIGINAL" || !trimmed) {
+    if (targetLang === "ORIGINAL" || !trimmed) {
       setLiveTranslation("");
       setIsTranslatingPreview(false);
       return;
@@ -161,7 +237,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     if (
       translationCacheRef.current &&
       translationCacheRef.current.source === trimmed &&
-      translationCacheRef.current.mode === sendLang
+      translationCacheRef.current.srcLang === sourceLang &&
+      translationCacheRef.current.tgtLang === targetLang
     ) {
       setLiveTranslation(translationCacheRef.current.result);
       return;
@@ -171,29 +248,24 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     setIsTranslatingPreview(true);
 
     const timer = setTimeout(async () => {
-      try {
-        const target = sendLang === "EN" ? "en" : "hi";
-        const res = await api.translate.convert(trimmed, target);
-        if (!cancelled && res.success) {
-          translationCacheRef.current = {
-            source: trimmed,
-            mode: sendLang,
-            result: res.translatedText,
-          };
-          setLiveTranslation(res.translatedText);
-        }
-      } catch {
-        if (!cancelled) setLiveTranslation("");
-      } finally {
-        if (!cancelled) setIsTranslatingPreview(false);
+      const res = await smartTranslate(trimmed, targetLang, sourceLang);
+      if (!cancelled) {
+        translationCacheRef.current = {
+          source: trimmed,
+          srcLang: sourceLang,
+          tgtLang: targetLang,
+          result: res.translatedText,
+        };
+        setLiveTranslation(res.translatedText);
+        setIsTranslatingPreview(false);
       }
-    }, 360);
+    }, 350);
 
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [inputText, sendLang]);
+  }, [inputText, sourceLang, targetLang]);
 
   const loadMessages = async () => {
     try {
@@ -216,7 +288,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, typingUsers]);
 
-  // Keep composer cleanly scrolled into view when mobile virtual keyboard opens
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
@@ -238,7 +309,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           if (prev.some((m) => m.id === msg.id)) return prev;
           return [...prev, msg];
         });
-        if (msg.senderId !== user?.id) {
+        if (msg.senderId !== user?.id && msg.type !== "SYSTEM") {
           api.messages.markConversationRead(conversation.id).catch(() => {});
         }
       }
@@ -296,10 +367,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       deliveredAt: r.deliveredAt || readAt,
                     }))
                   : [{ id: "temp", messageId: m.id, userId: readerId, deliveredAt: readAt, readAt }];
-              return {
-                ...m,
-                receipts: updatedReceipts,
-              };
+              return { ...m, receipts: updatedReceipts };
             }
             return m;
           })
@@ -307,25 +375,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       }
     };
 
-    const handleTypingStart = ({
-      conversationId: cId,
-      userId: typingId,
-    }: {
-      conversationId?: string;
-      userId: string;
-    }) => {
+    const handleTypingStart = ({ conversationId: cId, userId: typingId }: { conversationId?: string; userId: string }) => {
       if ((!cId || cId === conversation.id) && typingId !== user?.id) {
         setTypingUsers((prev) => new Set(prev).add(typingId));
       }
     };
 
-    const handleTypingStop = ({
-      conversationId: cId,
-      userId: typingId,
-    }: {
-      conversationId?: string;
-      userId: string;
-    }) => {
+    const handleTypingStop = ({ conversationId: cId, userId: typingId }: { conversationId?: string; userId: string }) => {
       if (!cId || cId === conversation.id) {
         setTypingUsers((prev) => {
           const next = new Set(prev);
@@ -358,19 +414,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const handleScrollMessages = () => {
     const el = messagesContainerRef.current;
     if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    setShowScrollDown(distanceFromBottom > 160);
+    setShowScrollDown(el.scrollHeight - el.scrollTop - el.clientHeight > 160);
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInputText(e.target.value);
-
-    // Auto-resize textarea smoothly
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
       textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 112)}px`;
     }
-
     if (!socket) return;
     socket.emit("typing:start", conversation.id);
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
@@ -379,33 +431,27 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }, 2000);
   };
 
-  // Voice recording handlers
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
-
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
-
       mediaRecorder.onstop = async () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
         const audioFile = new File([audioBlob], `voice_${Date.now()}.webm`, { type: "audio/webm" });
         stream.getTracks().forEach((t) => t.stop());
         await sendVoiceNote(audioFile);
       };
-
       mediaRecorder.start();
       setIsRecording(true);
       setRecordingTime(0);
-      recordIntervalRef.current = setInterval(() => {
-        setRecordingTime((prev) => prev + 1);
-      }, 1000);
+      recordIntervalRef.current = setInterval(() => setRecordingTime((p) => p + 1), 1000);
     } catch {
-      alert("Microphone permission is required to record voice messages.");
+      alert("Microphone permission is required.");
     }
   };
 
@@ -452,7 +498,28 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
-  // Send message (with automatic Hindi/Hinglish -> English conversion when English mode is selected!)
+  const handleSendPhotoFile = async (file: File, isViewOnce: boolean) => {
+    const uploaded = await api.uploads.upload(file);
+    const res = await api.messages.send({
+      conversationId: conversation.id,
+      body: isViewOnce ? "📷 Photo" : undefined,
+      type: "IMAGE",
+      isViewOnce,
+      attachments: [
+        {
+          originalName: uploaded.originalName,
+          storagePath: uploaded.url,
+          mimeType: uploaded.mimeType,
+          sizeBytes: uploaded.sizeBytes,
+        },
+      ],
+    });
+    if (res.success && res.message) {
+      setMessages((prev) => (prev.some((m) => m.id === res.message.id) ? prev : [...prev, res.message]));
+    }
+    onConversationUpdated();
+  };
+
   const handleSend = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const rawText = inputText.trim();
@@ -464,28 +531,23 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       setUploading(true);
       let finalBody = rawText;
 
-      if (rawText && sendLang !== "ORIGINAL") {
+      if (rawText && targetLang !== "ORIGINAL") {
         const cached = translationCacheRef.current;
-        if (cached && cached.source === rawText && cached.mode === sendLang && cached.result) {
+        if (
+          cached &&
+          cached.source === rawText &&
+          cached.srcLang === sourceLang &&
+          cached.tgtLang === targetLang &&
+          cached.result
+        ) {
           finalBody = cached.result;
         } else {
-          try {
-            const target = sendLang === "EN" ? "en" : "hi";
-            const tr = await api.translate.convert(rawText, target);
-            if (tr.success && tr.translatedText) {
-              finalBody = tr.translatedText;
-            }
-          } catch {
-            // Fallback to rawText if translation service is momentarily unreachable
-            finalBody = rawText;
-          }
+          const tr = await smartTranslate(rawText, targetLang, sourceLang);
+          finalBody = tr.translatedText || rawText;
         }
         if (finalBody !== rawText) {
-          showNotice(
-            sendLang === "EN"
-              ? "✨ Converted Hindi → English & sent"
-              : "✨ हिंदी में बदलकर भेजा गया"
-          );
+          const tgtLabel = TARGET_LANGUAGES.find((l) => l.code === targetLang)?.short || targetLang;
+          showNotice(`Translated to ${tgtLabel} & sent`);
         }
       }
 
@@ -512,24 +574,21 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         conversationId: conversation.id,
         body: finalBody || undefined,
         type: msgType,
+        isViewOnce: msgType === "IMAGE" ? isViewOnceSelected : false,
         replyToId: replyingTo ? replyingTo.id : undefined,
         attachments: attachmentsPayload,
       });
 
       if (res.success && res.message) {
-        setMessages((prev) => {
-          if (prev.some((m) => m.id === res.message.id)) return prev;
-          return [...prev, res.message];
-        });
+        setMessages((prev) => (prev.some((m) => m.id === res.message.id) ? prev : [...prev, res.message]));
       }
 
       setInputText("");
       setLiveTranslation("");
       translationCacheRef.current = null;
-      if (textareaRef.current) {
-        textareaRef.current.style.height = "auto";
-      }
+      if (textareaRef.current) textareaRef.current.style.height = "auto";
       setSelectedFile(null);
+      setIsViewOnceSelected(false);
       setReplyingTo(null);
       setEmojiOpen(false);
       onConversationUpdated();
@@ -540,10 +599,42 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
+  const handleOpenViewOnce = async (m: Message) => {
+    if (m.senderId === user?.id) {
+      showNotice(m.viewedAt ? "Opened by recipient" : "Recipient hasn't opened yet");
+      return;
+    }
+    if (m.viewedAt) {
+      showNotice("View-once photo already opened");
+      return;
+    }
+    try {
+      const res = await api.messages.openViewOnce(m.id);
+      const url = res.attachments?.[0]?.storagePath ? getFullUrl(res.attachments[0].storagePath) : null;
+      if (url) {
+        setViewOnceUrl(url);
+      }
+      setMessages((prev) =>
+        prev.map((item) =>
+          item.id === m.id ? { ...item, viewedAt: res.viewedAt || new Date().toISOString() } : item
+        )
+      );
+    } catch (err: any) {
+      showNotice(err.message || "Photo already viewed");
+    }
+  };
+
+  const handleTranslateIncoming = async (m: Message) => {
+    if (!m.body) return;
+    const tgt = targetLang !== "ORIGINAL" ? targetLang : lang === "hi" ? "hi" : "en";
+    const res = await smartTranslate(m.body, tgt, "auto");
+    setTranslatedBubbles((prev) => ({ ...prev, [m.id]: res.translatedText }));
+    setSelectedMsgId(null);
+  };
+
   const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingMessage || !editBody.trim()) return;
-
     try {
       const res = await api.messages.edit(editingMessage.id, editBody.trim());
       setMessages((prev) => prev.map((m) => (m.id === editingMessage.id ? res.message : m)));
@@ -586,19 +677,22 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
-  const formatMsgTime = (dateStr: string) => {
-    return new Date(dateStr).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  };
+  const formatMsgTime = (dateStr: string) => new Date(dateStr).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-  const formatRecordTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  const formatRecordTime = (seconds: number) =>
+    `${Math.floor(seconds / 60).toString().padStart(2, "0")}:${(seconds % 60).toString().padStart(2, "0")}`;
+
+  const handleHeaderProfileClick = () => {
+    if (conversation.type === "GROUP") {
+      onToggleInfo();
+    } else if (otherMember && onViewProfile) {
+      onViewProfile(otherMember);
+    }
   };
 
   return (
     <div className="flex-1 flex flex-col h-full min-h-0 bg-slate-100 dark:bg-slate-950 overflow-hidden relative">
-      {/* Top Pinned Header — Always visible without scrolling */}
+      {/* Top Pinned Header */}
       <div className="shrink-0 px-3 sm:px-4 py-2.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-2 shadow-sm z-20">
         <div className="flex items-center space-x-2.5 min-w-0 flex-1">
           <button
@@ -611,135 +705,155 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </button>
 
           <div
-            onClick={conversation.type === "GROUP" ? onToggleInfo : undefined}
-            className={`w-10 h-10 rounded-2xl flex items-center justify-center font-bold text-white shadow-sm shrink-0 ${
-              conversation.type === "GROUP"
-                ? "bg-gradient-to-tr from-indigo-500 to-purple-600 cursor-pointer"
-                : "bg-gradient-to-tr from-emerald-500 to-teal-600"
-            }`}
+            onClick={handleHeaderProfileClick}
+            className="flex items-center space-x-2.5 min-w-0 flex-1 cursor-pointer group"
           >
             {conversation.type === "GROUP" ? (
-              <Users className="w-5 h-5" />
+              <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-500 to-purple-600 text-white flex items-center justify-center shadow-sm shrink-0">
+                <Users className="w-5 h-5" />
+              </div>
             ) : (
-              otherMember?.displayName?.[0]?.toUpperCase() || otherMember?.username?.[0]?.toUpperCase() || "U"
+              <UserAvatar
+                name={otherMember?.displayName}
+                username={otherMember?.username}
+                avatarUrl={otherMember?.avatarUrl}
+                size="md"
+                isOnline={isOtherOnline}
+                showOnlineDot
+              />
             )}
-          </div>
 
-          <div
-            onClick={conversation.type === "GROUP" ? onToggleInfo : undefined}
-            className={`min-w-0 flex-1 ${conversation.type === "GROUP" ? "cursor-pointer" : ""}`}
-          >
-            <div className="flex items-center space-x-1.5 min-w-0">
-              <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100 leading-tight truncate">
-                {title}
-              </h2>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setIsE2EEOpen(true);
-                }}
-                title="E2EE Protected Session"
-                className="text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 shrink-0"
-              >
-                <Lock className="w-3.5 h-3.5" />
-              </button>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center space-x-1.5 min-w-0">
+                <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100 leading-tight truncate group-hover:text-emerald-600 transition-colors">
+                  {title}
+                </h2>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsE2EEOpen(true);
+                  }}
+                  title="E2EE Protected Session"
+                  className="text-emerald-600 dark:text-emerald-400 shrink-0"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                {typingUsers.size > 0 ? (
+                  <span className="text-emerald-600 dark:text-emerald-400 font-bold animate-pulse">
+                    typing...
+                  </span>
+                ) : conversation.type === "GROUP" ? (
+                  `${conversation.members.length} members`
+                ) : (
+                  <span className={isOtherOnline ? "text-emerald-600 dark:text-emerald-400 font-semibold" : ""}>
+                    {formatLastSeen(isOtherOnline, otherLastSeen)}
+                  </span>
+                )}
+              </p>
             </div>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-              {typingUsers.size > 0 ? (
-                <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center space-x-1 animate-pulse">
-                  <span>typing...</span>
-                </span>
-              ) : conversation.type === "GROUP" ? (
-                `${conversation.members.length} members`
-              ) : (
-                "Online • Encrypted"
-              )}
-            </p>
           </div>
         </div>
 
-        {/* Always-Visible Call & Info Actions */}
-        <div className="flex items-center space-x-1 sm:space-x-1.5 shrink-0">
-          {conversation.type === "DIRECT" && otherMember && (
-            <>
-              <button
-                type="button"
-                onClick={() => onStartCall?.(false)}
-                title="Voice Call"
-                className="p-2 sm:px-2.5 sm:py-2 text-slate-600 dark:text-slate-300 hover:text-emerald-600 dark:hover:text-emerald-400 bg-slate-100/80 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 rounded-xl transition-colors flex items-center space-x-1"
-              >
-                <Phone className="w-4 h-4" />
-              </button>
+        {/* Always-Visible Call & Menu Actions (Direct & Group Calls!) */}
+        <div className="flex items-center space-x-1 shrink-0">
+          <button
+            type="button"
+            onClick={() => (conversation.type === "GROUP" ? onStartGroupCall?.(false) : onStartCall?.(false))}
+            title={conversation.type === "GROUP" ? "Group Audio Call" : "Audio Call"}
+            className="p-2 text-slate-600 dark:text-slate-300 hover:text-emerald-600 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 rounded-xl transition-colors"
+          >
+            <Phone className="w-4 h-4" />
+          </button>
 
-              <button
-                type="button"
-                onClick={() => onStartCall?.(true)}
-                title="Full-Screen HD Video Call"
-                className="px-2.5 py-2 text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 rounded-xl transition-all shadow-sm shadow-emerald-600/20 flex items-center space-x-1.5"
-              >
-                <Video className="w-4 h-4" />
-                <span className="text-xs font-bold hidden sm:inline">Video</span>
-              </button>
-            </>
-          )}
+          <button
+            type="button"
+            onClick={() => (conversation.type === "GROUP" ? onStartGroupCall?.(true) : onStartCall?.(true))}
+            title={conversation.type === "GROUP" ? "Group Video Call" : "Video Call"}
+            className="px-2.5 py-2 text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 rounded-xl transition-all shadow-sm flex items-center space-x-1"
+          >
+            <Video className="w-4 h-4" />
+            <span className="text-xs font-bold hidden sm:inline">Video</span>
+          </button>
 
-          {conversation.type === "GROUP" && (
+          <div className="relative">
             <button
               type="button"
-              onClick={onToggleInfo}
-              title="Group Information"
-              className="p-2 text-slate-600 dark:text-slate-300 hover:text-emerald-600 bg-slate-100 dark:bg-slate-800 rounded-xl"
+              onClick={() => setMenuOpen(!menuOpen)}
+              className="p-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl"
             >
-              <Users className="w-4 h-4" />
+              <MoreVertical className="w-4 h-4" />
             </button>
-          )}
-
-          {conversation.type === "DIRECT" && otherMember && (
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setMenuOpen(!menuOpen)}
-                className="p-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl"
-              >
-                <MoreVertical className="w-4 h-4" />
-              </button>
-              {menuOpen && (
-                <div className="absolute right-0 top-11 w-48 bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 py-1.5 z-50 animate-scaleIn">
+            {menuOpen && (
+              <div className="absolute right-0 top-11 w-48 bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 py-1.5 z-50 animate-scaleIn">
+                {conversation.type === "GROUP" && (
                   <button
                     type="button"
                     onClick={() => {
                       setMenuOpen(false);
-                      setIsE2EEOpen(true);
+                      onToggleInfo();
                     }}
                     className="w-full px-4 py-2 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center space-x-2"
                   >
-                    <Lock className="w-4 h-4 text-emerald-600" />
-                    <span>Verify Security</span>
+                    <Users className="w-4 h-4 text-emerald-600" />
+                    <span>Group Info</span>
                   </button>
+                )}
+
+                {onToggleArchive && (
                   <button
                     type="button"
                     onClick={() => {
                       setMenuOpen(false);
-                      setIsReportOpen(true);
+                      onToggleArchive(conversation.id, !isArchived);
                     }}
-                    className="w-full px-4 py-2 text-left text-xs text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30 flex items-center space-x-2"
+                    className="w-full px-4 py-2 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center space-x-2"
                   >
-                    <ShieldAlert className="w-4 h-4 text-amber-600" />
-                    <span>Report User</span>
+                    <Archive className="w-4 h-4 text-amber-600" />
+                    <span>{isArchived ? "Unarchive Chat" : "Archive Chat"}</span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={handleToggleBlock}
-                    className="w-full px-4 py-2 text-left text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 flex items-center space-x-2 border-t border-slate-100 dark:border-slate-800"
-                  >
-                    <Ban className="w-4 h-4" />
-                    <span>{isBlocked ? "Unblock Contact" : "Block Contact"}</span>
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setIsE2EEOpen(true);
+                  }}
+                  className="w-full px-4 py-2 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center space-x-2"
+                >
+                  <Lock className="w-4 h-4 text-emerald-600" />
+                  <span>Verify Security</span>
+                </button>
+
+                {conversation.type === "DIRECT" && otherMember && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        setIsReportOpen(true);
+                      }}
+                      className="w-full px-4 py-2 text-left text-xs text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30 flex items-center space-x-2"
+                    >
+                      <ShieldAlert className="w-4 h-4 text-amber-600" />
+                      <span>Report User</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleToggleBlock}
+                      className="w-full px-4 py-2 text-left text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 flex items-center space-x-2 border-t border-slate-100 dark:border-slate-800"
+                    >
+                      <Ban className="w-4 h-4" />
+                      <span>{isBlocked ? "Unblock Contact" : "Block Contact"}</span>
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -758,22 +872,30 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             Loading messages...
           </div>
         ) : messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center text-slate-400 space-y-2.5 px-4">
-            <div className="w-14 h-14 bg-white dark:bg-slate-800 rounded-2xl flex items-center justify-center shadow-md">
-              <Sparkles className="w-7 h-7 text-emerald-600" />
-            </div>
-            <p className="text-sm font-bold text-slate-700 dark:text-slate-200">Say Namaste to {title}!</p>
-            <p className="text-xs text-slate-500 dark:text-slate-400 max-w-xs leading-relaxed">
-              Tip: Select <strong className="text-emerald-600 dark:text-emerald-400">Hindi → English</strong> below to type in Hindi or Hinglish and send directly in English!
-            </p>
+          <div className="flex flex-col items-center justify-center h-full text-center text-slate-400 space-y-2 px-4">
+            <Smile className="w-10 h-10 text-emerald-600/70" />
+            <p className="text-sm font-semibold text-slate-600 dark:text-slate-300">No messages yet</p>
+            <p className="text-xs text-slate-400">Say hello to start the conversation.</p>
           </div>
         ) : (
           messages.map((m) => {
+            // Centered Security / System Alert Bubble (e.g., Screenshot / Screen Recording Notice)
+            if (m.type === "SYSTEM") {
+              return (
+                <div key={m.id} className="flex justify-center my-2 animate-fadeIn">
+                  <span className="px-3.5 py-1 rounded-full bg-amber-100/90 dark:bg-amber-950/70 border border-amber-300/70 dark:border-amber-800 text-[11px] font-semibold text-amber-900 dark:text-amber-200 shadow-sm text-center">
+                    {m.body}
+                  </span>
+                </div>
+              );
+            }
+
             const isMe = m.senderId === user?.id;
             const isDeleted = Boolean(m.deletedAt);
             const isRead = m.receipts?.some((r) => r.readAt);
             const isActionOpen = selectedMsgId === m.id;
             const repliedMsg = m.replyToId ? messages.find((prev) => prev.id === m.replyToId) : undefined;
+            const isViewOnce = Boolean(m.isViewOnce);
 
             return (
               <div
@@ -791,7 +913,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   }`}
                 >
                   {!isMe && conversation.type === "GROUP" && (
-                    <p className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 mb-0.5">
+                    <p
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const memberUser = conversation.members.find((cm) => cm.userId === m.senderId)?.user;
+                        if (memberUser && onViewProfile) onViewProfile(memberUser);
+                      }}
+                      className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 mb-0.5 cursor-pointer hover:underline"
+                    >
                       {m.sender?.displayName || m.sender?.username}
                     </p>
                   )}
@@ -815,6 +944,31 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     <p className={`italic text-xs ${isMe ? "text-emerald-100" : "text-slate-400"}`}>
                       This message was deleted
                     </p>
+                  ) : isViewOnce ? (
+                    /* One-View Protected Photo Bubble */
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleOpenViewOnce(m);
+                      }}
+                      className={`flex items-center space-x-2.5 px-3 py-2 rounded-xl border text-xs font-semibold ${
+                        m.viewedAt
+                          ? "opacity-70 border-current/20 bg-black/10"
+                          : "border-amber-300/60 bg-black/15 hover:bg-black/25"
+                      }`}
+                    >
+                      <span className="w-6 h-6 rounded-full bg-amber-400 text-slate-950 font-extrabold text-[11px] flex items-center justify-center shrink-0">
+                        1
+                      </span>
+                      <span>
+                        {m.viewedAt
+                          ? "Photo Opened"
+                          : isMe
+                          ? "View-Once Photo Sent"
+                          : "Photo • Tap to view once"}
+                      </span>
+                    </button>
                   ) : (
                     <>
                       {m.attachments?.map((att) => {
@@ -842,11 +996,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                         if (isVideo) {
                           return (
                             <div key={att.id} className="mb-2" onClick={(e) => e.stopPropagation()}>
-                              <video
-                                src={fileUrl}
-                                controls
-                                className="rounded-xl max-h-64 w-full bg-black"
-                              />
+                              <video src={fileUrl} controls className="rounded-xl max-h-64 w-full bg-black" />
                             </div>
                           );
                         }
@@ -885,6 +1035,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       })}
 
                       {m.body && <p className="whitespace-pre-wrap break-words leading-relaxed">{m.body}</p>}
+                      {translatedBubbles[m.id] && (
+                        <p
+                          className={`mt-1.5 pt-1.5 border-t text-xs italic ${
+                            isMe ? "border-white/20 text-emerald-100" : "border-slate-200 dark:border-slate-700 text-emerald-700 dark:text-emerald-300"
+                          }`}
+                        >
+                          {translatedBubbles[m.id]}
+                        </p>
+                      )}
                     </>
                   )}
 
@@ -911,7 +1070,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   <div
                     className={`${
                       isActionOpen ? "opacity-100 flex" : "opacity-0 hidden sm:flex sm:group-hover:opacity-100"
-                    } transition-opacity items-center space-x-2.5 mt-1 px-1.5`}
+                    } transition-opacity items-center flex-wrap gap-2.5 mt-1 px-1.5`}
                   >
                     <button
                       type="button"
@@ -935,20 +1094,32 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       <Forward className="w-3 h-3" />
                       <span>Forward</span>
                     </button>
+                    {m.body && !isViewOnce && (
+                      <button
+                        type="button"
+                        onClick={() => handleTranslateIncoming(m)}
+                        className="text-[11px] text-slate-500 dark:text-slate-400 hover:text-emerald-600 flex items-center space-x-1"
+                      >
+                        <Languages className="w-3 h-3" />
+                        <span>Translate</span>
+                      </button>
+                    )}
                     {isMe && (
                       <>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingMessage(m);
-                            setEditBody(m.body || "");
-                            setSelectedMsgId(null);
-                          }}
-                          className="text-[11px] text-slate-500 dark:text-slate-400 hover:text-emerald-600 flex items-center space-x-1"
-                        >
-                          <Edit2 className="w-3 h-3" />
-                          <span>Edit</span>
-                        </button>
+                        {!isViewOnce && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingMessage(m);
+                              setEditBody(m.body || "");
+                              setSelectedMsgId(null);
+                            }}
+                            className="text-[11px] text-slate-500 dark:text-slate-400 hover:text-emerald-600 flex items-center space-x-1"
+                          >
+                            <Edit2 className="w-3 h-3" />
+                            <span>Edit</span>
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => handleDeleteMessage(m.id)}
@@ -967,40 +1138,35 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         )}
 
         {typingUsers.size > 0 && (
-          <div className="flex items-center space-x-2 bg-white dark:bg-slate-800 px-3.5 py-2 rounded-2xl rounded-tl-xs shadow-sm border border-slate-200/80 dark:border-slate-700 w-fit text-xs text-slate-600 dark:text-slate-300 my-1">
+          <div className="flex items-center space-x-2 bg-white dark:bg-slate-800 px-3.5 py-2 rounded-2xl shadow-sm border border-slate-200/80 dark:border-slate-700 w-fit text-xs text-slate-600 dark:text-slate-300 my-1">
             <div className="flex space-x-1 items-center py-1">
               <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-bounce [animation-delay:-0.3s]" />
               <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-bounce [animation-delay:-0.15s]" />
               <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-bounce" />
             </div>
-            <span className="text-xs text-emerald-700 dark:text-emerald-400 font-medium">
-              {conversation.type === "DIRECT" ? `${title} is typing...` : "Someone is typing..."}
-            </span>
+            <span className="text-xs text-emerald-700 dark:text-emerald-400 font-medium">typing...</span>
           </div>
         )}
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Scroll-To-Bottom Floating Button */}
       {showScrollDown && (
         <button
           type="button"
           onClick={() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })}
-          title="Jump to latest messages"
-          className="absolute right-4 bottom-28 z-20 p-2.5 rounded-full bg-white dark:bg-slate-800 text-emerald-600 dark:text-emerald-400 shadow-lg border border-slate-200 dark:border-slate-700 hover:scale-105 transition-transform"
+          className="absolute right-4 bottom-28 z-20 p-2.5 rounded-full bg-white dark:bg-slate-800 text-emerald-600 shadow-lg border border-slate-200 dark:border-slate-700"
         >
           <ArrowDown className="w-4 h-4" />
         </button>
       )}
 
-      {/* Subtle Conversion Notification Pill */}
       {sendToast && (
-        <div className="absolute bottom-28 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 rounded-full bg-slate-900/90 dark:bg-emerald-900/95 text-white text-xs font-medium shadow-lg backdrop-blur-md animate-fadeIn whitespace-nowrap">
+        <div className="absolute bottom-28 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 rounded-full bg-slate-900/90 text-white text-xs font-medium shadow-lg animate-fadeIn whitespace-nowrap">
           {sendToast}
         </div>
       )}
 
-      {/* Reply Quote Banner */}
+      {/* Reply Banner */}
       {replyingTo && (
         <div className="shrink-0 bg-emerald-50 dark:bg-emerald-950/60 border-t border-emerald-200 dark:border-emerald-800 px-4 py-2 flex items-center justify-between text-xs">
           <div className="flex items-center space-x-2 truncate">
@@ -1014,17 +1180,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               </span>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => setReplyingTo(null)}
-            className="p-1 text-slate-400 hover:text-slate-600"
-          >
+          <button type="button" onClick={() => setReplyingTo(null)} className="p-1 text-slate-400">
             <X className="w-4 h-4" />
           </button>
         </div>
       )}
 
-      {/* Edit Message Banner */}
+      {/* Edit Banner */}
       {editingMessage && (
         <form
           onSubmit={handleEditSubmit}
@@ -1038,15 +1200,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               type="text"
               value={editBody}
               onChange={(e) => setEditBody(e.target.value)}
-              className="w-full text-xs bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 border border-amber-300 dark:border-amber-700 rounded-lg px-2.5 py-1.5 mt-0.5 focus:outline-none focus:ring-1 focus:ring-amber-500"
+              className="w-full text-xs bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 border border-amber-300 dark:border-amber-700 rounded-lg px-2.5 py-1.5 mt-0.5 focus:outline-none"
               autoFocus
             />
           </div>
           <div className="flex items-center space-x-1">
-            <button
-              type="submit"
-              className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-semibold hover:bg-amber-700"
-            >
+            <button type="submit" className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-semibold">
               Save
             </button>
             <button
@@ -1055,7 +1214,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 setEditingMessage(null);
                 setEditBody("");
               }}
-              className="p-1 text-slate-400 hover:text-slate-600"
+              className="p-1 text-slate-400"
             >
               <X className="w-4 h-4" />
             </button>
@@ -1063,42 +1222,57 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </form>
       )}
 
-      {/* Selected File Preview Banner */}
+      {/* Selected File Preview Banner + View Once Option for Images */}
       {selectedFile && (
-        <div className="shrink-0 bg-slate-200/80 dark:bg-slate-800 px-4 py-2 flex items-center justify-between text-xs text-slate-700 dark:text-slate-200 border-t border-slate-200 dark:border-slate-700">
-          <div className="flex items-center space-x-2 truncate">
+        <div className="shrink-0 bg-slate-200/80 dark:bg-slate-800 px-3 sm:px-4 py-2 flex items-center justify-between gap-2 text-xs text-slate-700 dark:text-slate-200 border-t border-slate-200 dark:border-slate-700">
+          <div className="flex items-center space-x-2 min-w-0 flex-1">
             <Paperclip className="w-4 h-4 text-emerald-600 shrink-0" />
             <span className="font-semibold truncate">{selectedFile.name}</span>
-            <span className="text-slate-400">({(selectedFile.size / 1024).toFixed(1)} KB)</span>
           </div>
-          <button
-            type="button"
-            onClick={() => setSelectedFile(null)}
-            className="p-1 text-slate-500 hover:text-slate-800 dark:hover:text-white"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center space-x-2 shrink-0">
+            {selectedFile.type.startsWith("image/") && (
+              <button
+                type="button"
+                onClick={() => setIsViewOnceSelected((v) => !v)}
+                className={`px-2.5 py-1 rounded-full text-[11px] font-bold flex items-center space-x-1 transition-all ${
+                  isViewOnceSelected
+                    ? "bg-amber-500 text-slate-950 shadow-sm"
+                    : "bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-200"
+                }`}
+              >
+                <Eye className="w-3 h-3" />
+                <span>{isViewOnceSelected ? "1x View Once" : "View Once"}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedFile(null);
+                setIsViewOnceSelected(false);
+              }}
+              className="p-1 text-slate-500 hover:text-slate-800 dark:hover:text-white"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       )}
 
-      {/* Live Translation Preview Chip when English or Hindi Conversion is Selected */}
-      {sendLang !== "ORIGINAL" && inputText.trim().length > 0 && (
-        <div className="shrink-0 px-3 sm:px-4 py-1.5 bg-emerald-50/90 dark:bg-emerald-950/60 border-t border-emerald-200/80 dark:border-emerald-900 flex items-center justify-between text-xs">
-          <div className="flex items-center space-x-2 min-w-0 flex-1">
-            <Sparkles className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-            <span className="font-bold text-emerald-700 dark:text-emerald-300 shrink-0">
-              {sendLang === "EN" ? "English:" : "हिंदी:"}
-            </span>
-            <span className="text-slate-700 dark:text-slate-200 truncate">
-              {isTranslatingPreview ? "Converting..." : liveTranslation || inputText}
-            </span>
-          </div>
+      {/* Live Translation Preview */}
+      {targetLang !== "ORIGINAL" && inputText.trim().length > 0 && (
+        <div className="shrink-0 px-3 sm:px-4 py-1.5 bg-emerald-50/90 dark:bg-emerald-950/60 border-t border-emerald-200/80 dark:border-emerald-900 flex items-center space-x-2 text-xs">
+          <Languages className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+          <span className="font-bold text-emerald-700 dark:text-emerald-300 shrink-0">
+            {TARGET_LANGUAGES.find((l) => l.code === targetLang)?.short || targetLang}:
+          </span>
+          <span className="text-slate-700 dark:text-slate-200 truncate">
+            {isTranslatingPreview ? "Translating..." : liveTranslation || inputText}
+          </span>
         </div>
       )}
 
-      {/* Pinned Bottom Input Bar + Smart Hindi->English Selector */}
+      {/* Pinned Bottom Composer */}
       <div className="shrink-0 px-2.5 sm:px-3.5 pt-2 pb-[max(0.6rem,env(safe-area-inset-bottom))] bg-white dark:bg-slate-900 border-t border-slate-200/90 dark:border-slate-800 relative">
-        {/* Emoji Picker Popover */}
         {emojiOpen && (
           <div className="absolute bottom-full left-3 mb-2 p-2.5 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 grid grid-cols-6 gap-1.5 z-30 animate-scaleIn">
             {QUICK_EMOJIS.map((em) => (
@@ -1106,7 +1280,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 key={em}
                 type="button"
                 onClick={() => setInputText((prev) => prev + em)}
-                className="w-9 h-9 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center justify-center text-lg transition-transform hover:scale-110"
+                className="w-9 h-9 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center justify-center text-lg"
               >
                 {em}
               </button>
@@ -1114,50 +1288,39 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         )}
 
-        {/* Smart Language Mode Selector Strip (Always visible, zero scroll!) */}
-        <div className="flex items-center justify-between gap-2 pb-1.5 overflow-x-auto no-scrollbar">
-          <div className="flex items-center space-x-1 text-[11px] shrink-0">
-            <span className="text-slate-400 dark:text-slate-500 flex items-center space-x-1 mr-0.5 font-medium">
-              <Languages className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-              <span className="hidden sm:inline">Send in:</span>
-            </span>
-
-            <button
-              type="button"
-              onClick={() => handleChangeSendLang("ORIGINAL")}
-              className={`px-2.5 py-0.5 rounded-full font-semibold transition-all ${
-                sendLang === "ORIGINAL"
-                  ? "bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900 shadow-sm"
-                  : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200"
+        {/* Any-Language-to-Any-Language Translation Controls */}
+        <div className="flex items-center justify-between gap-2 pb-1.5 text-[11px] overflow-x-auto no-scrollbar">
+          <div className="flex items-center space-x-1.5 shrink-0">
+            <Languages className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+            <select
+              value={sourceLang}
+              onChange={(e) => handleChangeSourceLang(e.target.value)}
+              aria-label="Source Language"
+              className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-lg px-2 py-0.5 text-[11px] font-semibold focus:outline-none border border-slate-200 dark:border-slate-700 max-w-[110px]"
+            >
+              {SOURCE_LANGUAGES.map((l) => (
+                <option key={l.code} value={l.code}>
+                  {l.short}
+                </option>
+              ))}
+            </select>
+            <span className="text-slate-400">→</span>
+            <select
+              value={targetLang}
+              onChange={(e) => handleChangeTargetLang(e.target.value)}
+              aria-label="Target Language"
+              className={`rounded-lg px-2 py-0.5 text-[11px] font-bold focus:outline-none border max-w-[130px] ${
+                targetLang === "ORIGINAL"
+                  ? "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700"
+                  : "bg-emerald-600 text-white border-emerald-600"
               }`}
             >
-              {t.originalMode}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleChangeSendLang("EN")}
-              className={`px-2.5 py-0.5 rounded-full font-bold transition-all flex items-center space-x-1 ${
-                sendLang === "EN"
-                  ? "bg-gradient-to-r from-emerald-600 to-teal-500 text-white shadow-sm shadow-emerald-600/25"
-                  : "bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800 hover:bg-emerald-100"
-              }`}
-            >
-              <Sparkles className="w-3 h-3" />
-              <span>English (हिंदी → EN)</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleChangeSendLang("HI")}
-              className={`px-2.5 py-0.5 rounded-full font-semibold transition-all ${
-                sendLang === "HI"
-                  ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-sm"
-                  : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200"
-              }`}
-            >
-              {t.toHindiMode}
-            </button>
+              {TARGET_LANGUAGES.map((l) => (
+                <option key={l.code} value={l.code} className="text-slate-900 bg-white">
+                  {l.short}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
@@ -1173,17 +1336,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <button
                 type="button"
                 onClick={cancelRecording}
-                className="px-3 py-1 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-lg"
+                className="px-3 py-1 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-200 rounded-lg"
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={stopRecording}
-                className="px-3 py-1 text-xs bg-red-600 text-white rounded-lg font-bold hover:bg-red-700 flex items-center space-x-1"
+                className="px-3 py-1 text-xs bg-red-600 text-white rounded-lg font-bold flex items-center space-x-1"
               >
                 <Send className="w-3 h-3" />
-                <span>Send Voice</span>
+                <span>Send</span>
               </button>
             </div>
           </div>
@@ -1193,34 +1356,42 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               e.preventDefault();
               handleSend();
             }}
-            className="flex items-end space-x-1.5 sm:space-x-2"
+            className="flex items-end space-x-1 sm:space-x-1.5"
           >
             <input
               type="file"
               ref={fileInputRef}
               onChange={(e) => {
-                if (e.target.files?.[0]) setSelectedFile(e.target.files[0]);
+                if (e.target.files?.[0]) {
+                  setSelectedFile(e.target.files[0]);
+                  setIsViewOnceSelected(false);
+                }
               }}
               className="hidden"
             />
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              title="Attach file (Images, Documents, Audio)"
-              className="p-2.5 text-slate-500 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors shrink-0"
+              title="Attach File"
+              className="p-2 text-slate-500 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl shrink-0"
             >
               <Paperclip className="w-5 h-5" />
             </button>
 
             <button
               type="button"
+              onClick={() => setIsCameraOpen(true)}
+              title="Take Photo"
+              className="p-2 text-slate-500 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl shrink-0"
+            >
+              <Camera className="w-5 h-5" />
+            </button>
+
+            <button
+              type="button"
               onClick={() => setEmojiOpen((prev) => !prev)}
               title="Emoji"
-              className={`p-2.5 rounded-xl transition-colors shrink-0 ${
-                emojiOpen
-                  ? "text-emerald-600 bg-emerald-50 dark:bg-emerald-950/50"
-                  : "text-slate-500 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800"
-              }`}
+              className="p-2 text-slate-500 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl shrink-0 hidden xs:inline-flex sm:inline-flex"
             >
               <Smile className="w-5 h-5" />
             </button>
@@ -1237,21 +1408,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 }
               }}
               placeholder={
-                sendLang === "EN"
-                  ? t.typeHindiToEnPlaceholder
-                  : sendLang === "HI"
-                  ? "Type English/Hinglish (sends in हिंदी)..."
-                  : t.typeMessage
+                targetLang === "ORIGINAL"
+                  ? t.typeMessage
+                  : `Type message (sends in ${TARGET_LANGUAGES.find((l) => l.code === targetLang)?.short || targetLang})...`
               }
-              className="flex-1 py-2.5 px-3.5 text-sm rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 placeholder-slate-400 border border-transparent focus:bg-white dark:focus:bg-slate-950 focus:border-emerald-500 focus:outline-none resize-none max-h-28 transition-all"
+              className="flex-1 min-w-0 py-2.5 px-3 text-sm rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 placeholder-slate-400 border border-transparent focus:bg-white dark:focus:bg-slate-950 focus:border-emerald-500 focus:outline-none resize-none max-h-28"
             />
 
             {!inputText.trim() && !selectedFile ? (
               <button
                 type="button"
                 onClick={startRecording}
-                title="Record voice note"
-                className="p-2.5 text-slate-500 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors shrink-0"
+                title="Voice Note"
+                className="p-2.5 text-slate-500 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl shrink-0"
               >
                 <Mic className="w-5 h-5" />
               </button>
@@ -1259,18 +1428,58 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <button
                 type="submit"
                 disabled={uploading}
-                title={sendLang === "EN" ? "Convert to English & Send" : "Send"}
-                className="p-2.5 px-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl disabled:opacity-40 transition-all shrink-0 shadow-md shadow-emerald-600/25 active:scale-95 flex items-center space-x-1"
+                className="p-2.5 px-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl disabled:opacity-40 shrink-0 shadow-md flex items-center space-x-1"
               >
                 <Send className="w-4 h-4" />
-                {sendLang === "EN" && <span className="text-[11px] font-bold hidden sm:inline">EN</span>}
               </button>
             )}
           </form>
         )}
       </div>
 
-      {/* In-App Image Lightbox (Back button closes cleanly!) */}
+      {/* Camera Instant Snap Modal */}
+      <CameraModal
+        isOpen={isCameraOpen}
+        onClose={() => setIsCameraOpen(false)}
+        onSendPhoto={handleSendPhotoFile}
+      />
+
+      {/* Protected View-Once Photo Viewer (Blurs if window loses focus!) */}
+      {viewOnceUrl && (
+        <div
+          onClick={() => setViewOnceUrl(null)}
+          className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center p-4 select-none animate-fadeIn"
+        >
+          <div className="absolute top-4 inset-x-4 flex items-center justify-between text-white z-10">
+            <span className="px-3 py-1 rounded-full bg-amber-500 text-slate-950 text-xs font-bold flex items-center space-x-1.5">
+              <Eye className="w-3.5 h-3.5" />
+              <span>View Once Photo</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setViewOnceUrl(null)}
+              className="p-2 rounded-full bg-white/15 hover:bg-white/25"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <img
+            src={viewOnceUrl}
+            alt="View once"
+            onClick={(e) => e.stopPropagation()}
+            onContextMenu={(e) => e.preventDefault()}
+            draggable={false}
+            className={`max-w-full max-h-[82dvh] rounded-2xl object-contain transition-all ${
+              isWindowBlurred ? "blur-3xl opacity-10" : ""
+            }`}
+          />
+          <p className="text-[11px] text-slate-400 mt-3">
+            Disappears after closing
+          </p>
+        </div>
+      )}
+
+      {/* Standard In-App Image Lightbox */}
       {previewImageUrl && (
         <div
           onClick={() => setPreviewImageUrl(null)}
@@ -1279,7 +1488,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           <button
             type="button"
             onClick={() => setPreviewImageUrl(null)}
-            className="absolute top-4 right-4 p-2.5 rounded-full bg-white/15 hover:bg-white/25 text-white transition-colors"
+            className="absolute top-4 right-4 p-2.5 rounded-full bg-white/15 hover:bg-white/25 text-white"
           >
             <X className="w-6 h-6" />
           </button>
@@ -1292,7 +1501,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       )}
 
-      {/* Modals */}
       {otherMember && (
         <ReportModal
           isOpen={isReportOpen}
@@ -1302,11 +1510,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         />
       )}
 
-      <E2EEModal
-        isOpen={isE2EEOpen}
-        onClose={() => setIsE2EEOpen(false)}
-        peerName={title}
-      />
+      <E2EEModal isOpen={isE2EEOpen} onClose={() => setIsE2EEOpen(false)} peerName={title} />
 
       <ForwardModal
         isOpen={Boolean(forwardingMsg)}

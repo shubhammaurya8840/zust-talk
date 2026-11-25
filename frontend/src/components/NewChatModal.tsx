@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { User } from "../types";
 import { api } from "../api/client";
+import { UserAvatar } from "../utils/avatars";
 import { X, Search, UserCheck, Users, MessageSquare } from "lucide-react";
 
 interface NewChatModalProps {
@@ -203,9 +204,14 @@ export const NewChatModal: React.FC<NewChatModalProps> = ({ isOpen, onClose, onC
                   className="py-2.5 px-2 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl cursor-pointer transition-colors"
                 >
                   <div className="flex items-center space-x-3">
-                    <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center font-bold text-xs">
-                      {u.displayName?.[0]?.toUpperCase() || u.username?.[0]?.toUpperCase()}
-                    </div>
+                    <UserAvatar
+                      name={u.displayName}
+                      username={u.username}
+                      avatarUrl={u.avatarUrl}
+                      size="sm"
+                      isOnline={u.isOnline}
+                      showOnlineDot
+                    />
                     <div>
                       <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">{u.displayName}</p>
                       <div className="flex items-center space-x-2 text-xs text-slate-400">

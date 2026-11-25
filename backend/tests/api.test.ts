@@ -378,5 +378,112 @@ describe("India Chat Backend API Tests", () => {
     const data2 = await res2.json();
     expect(data2.success).toBe(true);
     expect(data2.detectedSource).toBe("hi");
+
+    // Any-to-any: English -> Spanish
+    const res3 = await fetch(`${baseUrl}/api/translate`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${user1Token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        text: "Good morning friend",
+        targetLang: "es"
+      })
+    });
+    expect(res3.status).toBe(200);
+    const data3 = await res3.json();
+    expect(data3.success).toBe(true);
+    expect(data3.translatedText.length).toBeGreaterThan(0);
+  });
+
+  it("12. Avatar Update, Read-Only Profile, Lookup, Archive & View-Once", async () => {
+    // Update avatar on user 1
+    const avRes = await fetch(`${baseUrl}/api/users/me`, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${user1Token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ avatarUrl: "avatar:astronaut" })
+    });
+    expect(avRes.status).toBe(200);
+    const avData = await avRes.json();
+    expect(avData.user.avatarUrl).toBe("avatar:astronaut");
+
+    // Read-only lookup by username (QR scan) & profile by ID
+    const lookupRes = await fetch(`${baseUrl}/api/users/lookup/testuser1`, {
+      headers: { Authorization: `Bearer ${user2Token}` }
+    });
+    expect(lookupRes.status).toBe(200);
+    const lookupData = await lookupRes.json();
+    expect(lookupData.user.username).toBe("testuser1");
+    expect(lookupData.user.avatarUrl).toBe("avatar:astronaut");
+
+    const profRes = await fetch(`${baseUrl}/api/users/${user1Id}`, {
+      headers: { Authorization: `Bearer ${user2Token}` }
+    });
+    expect(profRes.status).toBe(200);
+
+    // Archive & unarchive conversation
+    const archRes = await fetch(`${baseUrl}/api/conversations/${directConvId}/archive`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${user1Token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ archived: true })
+    });
+    expect(archRes.status).toBe(200);
+    const archData = await archRes.json();
+    expect(archData.archived).toBe(true);
+
+    const unarchRes = await fetch(`${baseUrl}/api/conversations/${directConvId}/archive`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${user1Token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ archived: false })
+    });
+    expect(unarchRes.status).toBe(200);
+    expect((await unarchRes.json()).archived).toBe(false);
+
+    // View-Once Photo: User 1 sends, User 2 opens once, second attempt returns 410 Gone
+    const voSend = await fetch(`${baseUrl}/api/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${user1Token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        conversationId: directConvId,
+        body: "Photo",
+        type: "IMAGE",
+        isViewOnce: true,
+        attachments: [{
+          originalName: "secret.jpg",
+          storagePath: "/uploads/secret.jpg",
+          mimeType: "image/jpeg",
+          sizeBytes: 2048
+        }]
+      })
+    });
+    expect(voSend.status).toBe(201);
+    const voMsgId = (await voSend.json()).message.id;
+
+    const firstOpen = await fetch(`${baseUrl}/api/messages/${voMsgId}/view-once`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user2Token}` }
+    });
+    expect(firstOpen.status).toBe(200);
+    const firstOpenData = await firstOpen.json();
+    expect(firstOpenData.attachments[0].storagePath).toBe("/uploads/secret.jpg");
+
+    const secondOpen = await fetch(`${baseUrl}/api/messages/${voMsgId}/view-once`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user2Token}` }
+    });
+    expect(secondOpen.status).toBe(410);
   });
 });
