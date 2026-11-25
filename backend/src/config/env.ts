@@ -17,7 +17,12 @@ const envSchema = z.object({
   OTP_TTL_MINUTES: z.coerce.number().int().positive().default(10),
   DEV_RETURN_OTP: z.string().default("false"),
   MAX_FILE_SIZE_MB: z.coerce.number().positive().default(25),
-  // Optional Free SMTP configuration (Gmail App Password, Brevo, Mailtrap, etc.)
+  // Optional Email delivery via HTTPS (works on Render free tier - port 443)
+  EMAIL_WEBHOOK_URL: z.string().optional(),
+  EMAIL_WEBHOOK_SECRET: z.string().optional(),
+  BREVO_API_KEY: z.string().optional(),
+  RESEND_API_KEY: z.string().optional(),
+  // Optional SMTP configuration (requires paid Render plan or host allowing port 465/587)
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z.coerce.number().int().positive().optional(),
   SMTP_SECURE: z.string().optional(),

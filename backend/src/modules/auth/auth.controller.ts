@@ -78,17 +78,27 @@ export async function sendEmailOtp(req: Request, res: Response) {
   });
 
   const delivery = await sendOtpEmail({ to: cleanEmail, code, purpose });
+  const isRealDelivery =
+    delivery.mode === "webhook" ||
+    delivery.mode === "brevo" ||
+    delivery.mode === "resend" ||
+    delivery.mode === "smtp";
+
+  if (delivery.mode === "failed" && env.DEV_RETURN_OTP !== "true") {
+    throw new HttpError(502, delivery.error || "Unable to send OTP email right now. Please try again.");
+  }
 
   const response: Record<string, unknown> = {
     success: true,
-    message:
-      delivery.mode === "smtp"
-        ? `OTP sent to ${cleanEmail}. Check your inbox or spam folder.`
-        : `OTP generated for ${cleanEmail}. Configure SMTP env vars for direct inbox delivery.`,
+    message: isRealDelivery
+      ? `OTP sent to ${cleanEmail}. Check your inbox or spam folder.`
+      : delivery.mode === "failed"
+        ? `${delivery.error || "Email server unavailable."} Use Test OTP below.`
+        : `OTP generated for ${cleanEmail}. Configure EMAIL_WEBHOOK_URL or BREVO_API_KEY for direct inbox delivery.`,
     deliveryMode: delivery.mode,
   };
 
-  if (delivery.mode !== "smtp") {
+  if (!isRealDelivery) {
     response.devOtp = code;
     if (delivery.previewUrl) response.previewUrl = delivery.previewUrl;
   }

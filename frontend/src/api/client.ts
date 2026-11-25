@@ -46,7 +46,24 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     headers.set("Content-Type", "application/json");
   }
 
-  let res = await fetch(url, { ...options, headers });
+  const controller = !options.signal ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), 45000) : null;
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...options,
+      headers,
+      signal: options.signal || controller?.signal,
+    });
+  } catch (err: any) {
+    if (err?.name === "AbortError") {
+      throw new Error("Server took too long to respond (timeout). Please try again.");
+    }
+    throw err;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
 
   if (res.status === 401 && sessionStorage.getItem(REFRESH_KEY)) {
     const refreshToken = sessionStorage.getItem(REFRESH_KEY);
@@ -97,7 +114,7 @@ export const api = {
       request<{
         success: boolean;
         message: string;
-        deliveryMode: "smtp" | "ethereal" | "console";
+        deliveryMode: "webhook" | "brevo" | "resend" | "smtp" | "ethereal" | "console" | "failed";
         devOtp?: string;
         previewUrl?: string;
       }>("/api/auth/email/send-otp", {
