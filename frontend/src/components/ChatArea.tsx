@@ -96,6 +96,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [viewOnceUrl, setViewOnceUrl] = useState<string | null>(null);
   const [isWindowBlurred, setIsWindowBlurred] = useState(false);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [securityBanner, setSecurityBanner] = useState<string | null>(null);
 
   // Any-to-Any Language Translation Mode
   const [sourceLang, setSourceLang] = useState<string>(() => localStorage.getItem("zust_src_lang") || "auto");
@@ -165,16 +166,25 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const triggerSecurityAlert = (kind: "screenshot" | "screen_record") => {
     const now = Date.now();
-    if (now - lastAlertSentRef.current < 3000) return;
+    if (now - lastAlertSentRef.current < 2500) return;
     lastAlertSentRef.current = now;
+    const localMsg =
+      kind === "screen_record"
+        ? "🚨 Screen recording detected!"
+        : "📸 Screenshot detected!";
+    setSecurityBanner(localMsg);
+    setTimeout(() => {
+      setSecurityBanner((curr) => (curr === localMsg ? null : curr));
+    }, 5000);
     socket?.emit("chat:security_alert", { conversationId: conversation.id, kind });
   };
 
   // Screenshot & Screen Recording Detection + View-Once Blur Protection
   useEffect(() => {
-    const handleKeyUp = (e: KeyboardEvent) => {
-      const key = e.key.toLowerCase();
-      const isPrintScreen = e.key === "PrintScreen" || e.code === "PrintScreen";
+    const checkKeyEvent = (e: KeyboardEvent) => {
+      const key = (e.key || "").toLowerCase();
+      const isPrintScreen =
+        e.key === "PrintScreen" || e.code === "PrintScreen" || e.keyCode === 44;
       const isMacScreenshot = e.metaKey && e.shiftKey && ["3", "4", "5"].includes(key);
       const isWinSnip = e.metaKey && e.shiftKey && key === "s";
       if (isPrintScreen || isMacScreenshot || isWinSnip) {
@@ -186,12 +196,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     const handleFocus = () => setIsWindowBlurred(false);
     const handleVis = () => setIsWindowBlurred(document.visibilityState === "hidden");
 
-    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("keydown", checkKeyEvent);
+    window.addEventListener("keyup", checkKeyEvent);
     window.addEventListener("blur", handleBlur);
     window.addEventListener("focus", handleFocus);
     document.addEventListener("visibilitychange", handleVis);
 
-    // Intercept browser getDisplayMedia (screen recording) while chat is active
     const md = navigator.mediaDevices as MediaDevices & { getDisplayMedia?: (...args: any[]) => Promise<MediaStream> };
     const origGetDisplayMedia = md?.getDisplayMedia?.bind(md);
     if (md && origGetDisplayMedia) {
@@ -202,7 +212,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
 
     return () => {
-      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("keydown", checkKeyEvent);
+      window.removeEventListener("keyup", checkKeyEvent);
       window.removeEventListener("blur", handleBlur);
       window.removeEventListener("focus", handleFocus);
       document.removeEventListener("visibilitychange", handleVis);
@@ -309,6 +320,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           if (prev.some((m) => m.id === msg.id)) return prev;
           return [...prev, msg];
         });
+        if (msg.type === "SYSTEM" && msg.body) {
+          setSecurityBanner(msg.body);
+          setTimeout(() => {
+            setSecurityBanner((curr) => (curr === msg.body ? null : curr));
+          }, 5000);
+        }
         if (msg.senderId !== user?.id && msg.type !== "SYSTEM") {
           api.messages.markConversationRead(conversation.id).catch(() => {});
         }
@@ -856,6 +873,20 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Instant Screenshot / Screen Recording Alert Banner */}
+      {securityBanner && (
+        <div className="shrink-0 px-4 py-2 bg-amber-500 text-slate-950 text-xs font-bold flex items-center justify-between shadow-md z-20 animate-fadeIn">
+          <span>{securityBanner}</span>
+          <button
+            type="button"
+            onClick={() => setSecurityBanner(null)}
+            className="p-0.5 hover:bg-black/10 rounded"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Scrollable Message Timeline */}
       <div

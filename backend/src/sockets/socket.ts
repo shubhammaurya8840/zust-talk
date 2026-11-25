@@ -166,6 +166,13 @@ export function initializeSocket(server: HttpServer) {
           }
         });
 
+        const convMembers = await prisma.conversationMember.findMany({
+          where: { conversationId: data.conversationId },
+          select: { userId: true }
+        });
+        for (const m of convMembers) {
+          io.to(`user:${m.userId}`).emit("message:new", systemMsg);
+        }
         io.to(`conversation:${data.conversationId}`).emit("message:new", systemMsg);
       } catch (err) {
         console.error("Failed to create security alert:", err);
@@ -299,15 +306,6 @@ export function initializeSocket(server: HttpServer) {
           const lastSeen = new Date();
           prisma.user.update({ where: { id: userId }, data: { lastSeenAt: lastSeen } }).catch(() => {});
           io.emit("presence:update", { userId, isOnline: false, lastSeenAt: lastSeen.toISOString() });
-
-          // Immediately expire ephemeral nearby presence when user disconnects
-          prisma.nearbyPresence.deleteMany({ where: { userId } })
-            .then((del) => {
-              if (del.count > 0) {
-                io.to("nearby:watchers").emit("nearby:users-removed", { userIds: [userId] });
-              }
-            })
-            .catch(() => {});
         }
       }
 

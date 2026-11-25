@@ -488,6 +488,26 @@ describe("India Chat Backend API Tests", () => {
   });
 
   it("13. Nearby Radar - Consent, 100m Radius, Privacy, Invisible Mode & Connection Requests", async () => {
+    // Reset test state for idempotent runs against shared DB
+    await prisma.connectionRequest.deleteMany({
+      where: {
+        OR: [
+          { senderId: user1Id, receiverId: user2Id },
+          { senderId: user2Id, receiverId: user1Id }
+        ]
+      }
+    });
+    await fetch(`${baseUrl}/api/nearby/settings`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ discoveryEnabled: false, invisibleMode: false })
+    });
+    await fetch(`${baseUrl}/api/nearby/settings`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${user2Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ discoveryEnabled: false, invisibleMode: false })
+    });
+
     // 1. Scanning without consent must fail with 403
     const deniedScan = await fetch(`${baseUrl}/api/nearby/scan`, {
       method: "POST",

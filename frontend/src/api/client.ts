@@ -71,7 +71,14 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     }
   }
 
-  const data = await res.json();
+  const rawText = await res.text();
+  let data: any = {};
+  try {
+    data = rawText ? JSON.parse(rawText) : {};
+  } catch {
+    data = { message: rawText || `Request failed with status ${res.status}` };
+  }
+
   if (!res.ok) {
     throw new Error(data.message || `Request failed with status ${res.status}`);
   }

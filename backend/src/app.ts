@@ -15,12 +15,19 @@ import { notFound, errorHandler } from "./middleware/error";
 import { env } from "./config/env";
 
 const app = express();
+app.set("trust proxy", 1);
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(cors({ origin: env.CLIENT_ORIGIN === "*" ? true : env.CLIENT_ORIGIN.split(",").map(s => s.trim()), credentials: true }));
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use("/uploads", express.static(path.resolve(process.cwd(), "uploads"), { dotfiles: "deny", index: false }));
-app.use("/api", rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api", rateLimit({
+  windowMs: 60_000,
+  limit: 600,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { success: false, message: "Too many requests, please slow down a moment." },
+}));
 
 app.get("/api/health", (_req, res) => res.json({ success: true, service: "india-chat-backend", status: "healthy" }));
 app.use("/api/auth", authRoutes);

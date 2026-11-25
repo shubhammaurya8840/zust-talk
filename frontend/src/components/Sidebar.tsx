@@ -17,6 +17,7 @@ import {
   X,
   Archive,
   Radar,
+  Bell,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -30,6 +31,8 @@ interface SidebarProps {
   isRadarActive?: boolean;
   pendingRadarRequests?: number;
   onToggleArchive?: (conversationId: string, archived: boolean) => void;
+  notificationPermission?: NotificationPermission | "unsupported";
+  onRequestNotifications?: () => void;
   lang: Language;
   onToggleLang: () => void;
   isDark?: boolean;
@@ -47,6 +50,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isRadarActive = false,
   pendingRadarRequests = 0,
   onToggleArchive,
+  notificationPermission,
+  onRequestNotifications,
   lang,
   onToggleLang,
   isDark = false,
@@ -103,8 +108,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   return (
-    <div className="h-full min-h-0 flex flex-col bg-white dark:bg-slate-900 border-r border-slate-200/80 dark:border-slate-800 w-full md:w-80 lg:w-96 shrink-0">
-      {/* Top Profile & Action Bar (No extra app name under user name!) */}
+    <div className="relative h-full min-h-0 flex flex-col bg-white dark:bg-slate-900 border-r border-slate-200/80 dark:border-slate-800 w-full md:w-80 lg:w-96 shrink-0">
+      {/* Top Profile & Action Bar */}
       <div className="shrink-0 px-3.5 py-3 bg-slate-50/80 dark:bg-slate-900 border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-2">
         <div
           className="flex items-center space-x-2.5 cursor-pointer min-w-0 flex-1 group"
@@ -187,6 +192,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
+      {/* Compact Chrome Notification Opt-In Strip when Permission is Default */}
+      {notificationPermission === "default" && onRequestNotifications && (
+        <div className="shrink-0 px-3 py-2 bg-emerald-50 dark:bg-emerald-950/40 border-b border-emerald-200/70 dark:border-emerald-900 flex items-center justify-between gap-2">
+          <div className="flex items-center space-x-2 text-[11px] text-emerald-800 dark:text-emerald-200 font-medium min-w-0">
+            <Bell className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+            <span className="truncate">Turn on Chrome notifications for messages & calls</span>
+          </div>
+          <button
+            type="button"
+            onClick={onRequestNotifications}
+            className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold shrink-0"
+          >
+            Enable
+          </button>
+        </div>
+      )}
+
       {/* Search & Filter Tabs */}
       <div className="shrink-0 p-3 border-b border-slate-100 dark:border-slate-800 space-y-2.5 bg-white dark:bg-slate-900">
         <div className="relative">
@@ -238,35 +260,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <span>Archived{archivedCount > 0 ? ` (${archivedCount})` : ""}</span>
           </button>
         </div>
-
-        {/* Dedicated Nearby Radar Entry */}
-        {onOpenRadar && (
-          <button
-            type="button"
-            onClick={onOpenRadar}
-            className={`w-full px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-between transition-all border ${
-              isRadarActive
-                ? "bg-emerald-600 text-white border-emerald-600 shadow-sm"
-                : "bg-emerald-50/80 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200/80 dark:border-emerald-900 hover:bg-emerald-100 dark:hover:bg-emerald-950/70"
-            }`}
-          >
-            <span className="flex items-center space-x-2">
-              <Radar className="w-4 h-4 shrink-0" />
-              <span>Nearby Radar (100m)</span>
-            </span>
-            {pendingRadarRequests > 0 ? (
-              <span className="px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 text-[10px] font-extrabold">
-                {pendingRadarRequests} new
-              </span>
-            ) : (
-              <span className="text-[10px] opacity-80">Scan</span>
-            )}
-          </button>
-        )}
       </div>
 
       {/* Conversations List */}
-      <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/80 overscroll-contain">
+      <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/80 overscroll-contain pb-20">
         {filtered.length === 0 ? (
           <div className="p-8 text-center text-slate-400 flex flex-col items-center justify-center h-full">
             <Users className="w-10 h-10 text-slate-300 dark:text-slate-700 mb-2" />
@@ -368,6 +365,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
           })
         )}
       </div>
+
+      {/* Floating Bottom-Right Circular Nearby Radar Button */}
+      {onOpenRadar && (
+        <button
+          type="button"
+          onClick={onOpenRadar}
+          title="Nearby Radar (100m)"
+          className={`absolute bottom-5 right-5 z-20 w-14 h-14 rounded-full flex items-center justify-center shadow-2xl transition-all hover:scale-105 active:scale-95 border-2 ${
+            isRadarActive
+              ? "bg-slate-900 dark:bg-emerald-500 text-white border-emerald-400 ring-4 ring-emerald-500/30"
+              : "bg-gradient-to-tr from-emerald-500 to-teal-600 text-white border-white/80 dark:border-slate-800 shadow-emerald-600/35"
+          }`}
+        >
+          <Radar className="w-6 h-6" />
+          {pendingRadarRequests > 0 && (
+            <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1 rounded-full bg-amber-400 text-slate-950 text-[10px] font-extrabold flex items-center justify-center shadow">
+              {pendingRadarRequests}
+            </span>
+          )}
+        </button>
+      )}
     </div>
   );
 };

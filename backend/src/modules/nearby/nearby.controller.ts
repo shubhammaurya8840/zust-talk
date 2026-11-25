@@ -4,7 +4,7 @@ import { prisma } from "../../config/prisma";
 import { HttpError } from "../../utils/http-error";
 import { io, isUserOnline } from "../../sockets/socket";
 
-const PRESENCE_TTL_MS = 3 * 60 * 1000; // 3 minutes automatic expiry (within 2-5 min policy)
+const PRESENCE_TTL_MS = 5 * 60 * 1000; // 5 minutes automatic expiry (keeps discovery active even when tab/app is minimized)
 const MAX_RADIUS_METERS = 100;
 
 function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {

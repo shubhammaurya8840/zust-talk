@@ -1,10 +1,16 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "./context/AuthContext";
 import { useSocket } from "./context/SocketContext";
 import { api } from "./api/client";
-import { Conversation, User } from "./types";
+import { Conversation, Message, User } from "./types";
 import { Language, translations } from "./utils/i18n";
 import { useInitAppBackGuard, useBackLayer } from "./utils/useBackNavigation";
+import {
+  getNotificationPermissionState,
+  requestAppNotificationPermission,
+  showAppNotification,
+  playSoftNotificationTone,
+} from "./utils/notifications";
 import { AuthScreen } from "./components/AuthScreen";
 import { Sidebar } from "./components/Sidebar";
 import { ChatArea } from "./components/ChatArea";
@@ -18,10 +24,19 @@ import { GroupCallModal, ActiveGroupCallState } from "./components/GroupCallModa
 import { NearbyRadarPage } from "./components/NearbyRadarPage";
 import { MessageSquare, Plus, QrCode, Radar } from "lucide-react";
 
+const CONV_CACHE_KEY = "zust_cached_conversations";
+
 export const AppContent: React.FC = () => {
   const { user, loading } = useAuth();
   const { socket, syncPresence, updatePresenceBulk } = useSocket();
-  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>(() => {
+    try {
+      const cached = localStorage.getItem(CONV_CACHE_KEY);
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [lang, setLang] = useState<Language>("en");
   const [isDark, setIsDark] = useState<boolean>(() => localStorage.getItem("zust_theme") === "dark");
@@ -33,11 +48,24 @@ export const AppContent: React.FC = () => {
   const [isGroupInfoOpen, setIsGroupInfoOpen] = useState(false);
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [isRadarOpen, setIsRadarOpen] = useState(false);
+  const [radarInitialTab, setRadarInitialTab] = useState<"NEARBY" | "REQUESTS">("NEARBY");
   const [pendingRadarRequests, setPendingRadarRequests] = useState(0);
   const [activeCall, setActiveCall] = useState<ActiveCallState | null>(null);
   const [activeGroupCall, setActiveGroupCall] = useState<ActiveGroupCallState | null>(null);
   const [isCallMinimized, setIsCallMinimized] = useState(false);
   const [backToast, setBackToast] = useState<string | null>(null);
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission | "unsupported">(() =>
+    getNotificationPermissionState()
+  );
+
+  const activeConversationIdRef = useRef<string | null>(null);
+  const isRadarOpenRef = useRef<boolean>(false);
+  useEffect(() => {
+    activeConversationIdRef.current = activeConversationId;
+  }, [activeConversationId]);
+  useEffect(() => {
+    isRadarOpenRef.current = isRadarOpen;
+  }, [isRadarOpen]);
 
   const t = translations[lang];
 
@@ -66,10 +94,54 @@ export const AppContent: React.FC = () => {
     setIsGroupInfoOpen(false);
   });
 
+  // Handle clicking any Chrome notification (via Service Worker or desktop Notification)
+  useEffect(() => {
+    const handleNotificationRoute = (data: any) => {
+      if (!data) return;
+      if (data.type === "message" && data.conversationId) {
+        setIsRadarOpen(false);
+        setActiveConversationId(String(data.conversationId));
+      } else if (data.type === "nearby_request") {
+        setRadarInitialTab("REQUESTS");
+        setIsRadarOpen(true);
+      }
+    };
+
+    const onWindowNotif = (e: Event) => {
+      handleNotificationRoute((e as CustomEvent).detail);
+    };
+
+    const onSwMessage = (e: MessageEvent) => {
+      if (e.data?.type === "NOTIFICATION_CLICK") {
+        handleNotificationRoute(e.data.data);
+      }
+    };
+
+    window.addEventListener("zust:notification-click", onWindowNotif);
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.addEventListener("message", onSwMessage);
+    }
+
+    return () => {
+      window.removeEventListener("zust:notification-click", onWindowNotif);
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.removeEventListener("message", onSwMessage);
+      }
+    };
+  }, []);
+
+  const handleRequestNotifications = async () => {
+    const res = await requestAppNotificationPermission();
+    setNotifPermission(res);
+  };
+
   const loadConversations = useCallback(async () => {
     try {
       const res = await api.conversations.list();
       setConversations(res.conversations);
+      try {
+        localStorage.setItem(CONV_CACHE_KEY, JSON.stringify(res.conversations));
+      } catch {}
 
       const entries: Array<{ userId: string; isOnline?: boolean; lastSeenAt?: string | null }> = [];
       const ids: string[] = [];
@@ -102,7 +174,7 @@ export const AppContent: React.FC = () => {
     }
   }, [user, loadConversations]);
 
-  // Handle QR Deep-Link (`/?chat=@username` or `/chat/@username`) automatically!
+  // Handle QR Deep-Link (`/?chat=@username` or `/chat/@username`)
   useEffect(() => {
     if (!user) return;
     const params = new URLSearchParams(window.location.search);
@@ -128,15 +200,40 @@ export const AppContent: React.FC = () => {
   }, [user, loadConversations]);
 
   useEffect(() => {
-    if (!socket) return;
+    if (!socket || !user) return;
 
     const handleConversationUpdated = () => {
       loadConversations();
     };
 
-    socket.on("conversation:updated", handleConversationUpdated);
-    socket.on("message:new", handleConversationUpdated);
-    socket.on("user:updated", handleConversationUpdated);
+    const handleNewMessageNotif = (msg: Message) => {
+      loadConversations();
+      if (msg.senderId === user.id) return;
+
+      const isViewingThisChat =
+        !document.hidden &&
+        !isRadarOpenRef.current &&
+        activeConversationIdRef.current === msg.conversationId;
+
+      if (!isViewingThisChat) {
+        const senderName = msg.sender?.displayName || msg.sender?.username || "New Message";
+        const preview = msg.isViewOnce
+          ? "📷 Sent a view-once photo"
+          : msg.type === "VOICE"
+          ? "🎤 Sent a voice message"
+          : msg.type === "IMAGE"
+          ? "📷 Sent a photo"
+          : msg.body || "Sent a message";
+
+        playSoftNotificationTone();
+        showAppNotification({
+          title: senderName,
+          body: preview,
+          tag: `msg-${msg.conversationId}`,
+          data: { type: "message", conversationId: msg.conversationId },
+        });
+      }
+    };
 
     const handleIncomingCall = (data: {
       fromUserId: string;
@@ -158,6 +255,15 @@ export const AppContent: React.FC = () => {
         },
         conversationId: data.conversationId,
       });
+
+      showAppNotification({
+        title: `Incoming ${data.isVideo ? "Video" : "Voice"} Call`,
+        body: `${data.callerName} is calling you...`,
+        tag: `call-${data.fromUserId}`,
+        requireInteraction: true,
+        vibrate: [300, 150, 300, 150, 300],
+        data: { type: "call", conversationId: data.conversationId },
+      });
     };
 
     const handleIncomingGroupCall = (data: {
@@ -174,6 +280,42 @@ export const AppContent: React.FC = () => {
         conversationTitle: data.conversationTitle,
         callerName: data.callerName,
       });
+
+      showAppNotification({
+        title: `Group ${data.isVideo ? "Video" : "Voice"} Call`,
+        body: `${data.callerName} started a call in ${data.conversationTitle}`,
+        tag: `gcall-${data.conversationId}`,
+        requireInteraction: true,
+        vibrate: [300, 150, 300],
+        data: { type: "call", conversationId: data.conversationId },
+      });
+    };
+
+    const handleNearbyRequestReceived = (req: any) => {
+      api.nearby
+        .getRequests()
+        .then((res) => setPendingRadarRequests((res.incoming || []).length))
+        .catch(() => {});
+
+      const senderName = req?.sender?.displayName || req?.sender?.username || "Someone nearby";
+      playSoftNotificationTone();
+      showAppNotification({
+        title: "Nearby Radar Request",
+        body: `${senderName} wants to connect with you!`,
+        tag: `nearby-req-${req?.id || Date.now()}`,
+        data: { type: "nearby_request" },
+      });
+    };
+
+    const handleNearbyRequestAccepted = (data: any) => {
+      loadConversations();
+      playSoftNotificationTone();
+      showAppNotification({
+        title: "Connection Accepted",
+        body: "Your nearby connection request was accepted — tap to chat!",
+        tag: `nearby-acc-${data?.requestId || Date.now()}`,
+        data: { type: "message", conversationId: data?.conversationId },
+      });
     };
 
     const refreshRadarBadge = () => {
@@ -183,23 +325,26 @@ export const AppContent: React.FC = () => {
         .catch(() => {});
     };
 
+    socket.on("conversation:updated", handleConversationUpdated);
+    socket.on("message:new", handleNewMessageNotif);
+    socket.on("user:updated", handleConversationUpdated);
     socket.on("call:incoming", handleIncomingCall);
     socket.on("group-call:incoming", handleIncomingGroupCall);
-    socket.on("nearby:request-received", refreshRadarBadge);
+    socket.on("nearby:request-received", handleNearbyRequestReceived);
     socket.on("nearby:request-cancelled", refreshRadarBadge);
-    socket.on("nearby:request-accepted", loadConversations);
+    socket.on("nearby:request-accepted", handleNearbyRequestAccepted);
 
     return () => {
       socket.off("conversation:updated", handleConversationUpdated);
-      socket.off("message:new", handleConversationUpdated);
+      socket.off("message:new", handleNewMessageNotif);
       socket.off("user:updated", handleConversationUpdated);
       socket.off("call:incoming", handleIncomingCall);
       socket.off("group-call:incoming", handleIncomingGroupCall);
-      socket.off("nearby:request-received", refreshRadarBadge);
+      socket.off("nearby:request-received", handleNearbyRequestReceived);
       socket.off("nearby:request-cancelled", refreshRadarBadge);
-      socket.off("nearby:request-accepted", loadConversations);
+      socket.off("nearby:request-accepted", handleNearbyRequestAccepted);
     };
-  }, [socket, loadConversations]);
+  }, [socket, user, loadConversations]);
 
   const toggleLanguage = () => setLang((prev) => (prev === "en" ? "hi" : "en"));
   const toggleTheme = () => setIsDark((prev) => !prev);
@@ -296,12 +441,15 @@ export const AppContent: React.FC = () => {
           onOpenProfile={() => setIsProfileOpen(true)}
           onOpenInvite={() => setIsInviteOpen(true)}
           onOpenRadar={() => {
+            setRadarInitialTab("NEARBY");
             setIsRadarOpen(true);
             setIsGroupInfoOpen(false);
           }}
           isRadarActive={isRadarOpen}
           pendingRadarRequests={pendingRadarRequests}
           onToggleArchive={handleToggleArchive}
+          notificationPermission={notifPermission}
+          onRequestNotifications={handleRequestNotifications}
           lang={lang}
           onToggleLang={toggleLanguage}
           isDark={isDark}
@@ -316,6 +464,7 @@ export const AppContent: React.FC = () => {
       >
         {isRadarOpen ? (
           <NearbyRadarPage
+            initialTab={radarInitialTab}
             onBack={() => setIsRadarOpen(false)}
             onRequestsCountChange={setPendingRadarRequests}
             onOpenConversation={(convId) => {
@@ -342,7 +491,6 @@ export const AppContent: React.FC = () => {
             lang={lang}
           />
         ) : (
-          /* Minimal Clean Desktop Empty State (no marketing cards or feature text!) */
           <div className="flex-1 flex flex-col items-center justify-center p-8 bg-slate-50 dark:bg-slate-950 text-center">
             <div className="max-w-sm space-y-4">
               <div className="w-16 h-16 bg-gradient-to-tr from-emerald-500 to-teal-500 text-white rounded-3xl flex items-center justify-center mx-auto shadow-lg shadow-emerald-600/20">
@@ -352,7 +500,7 @@ export const AppContent: React.FC = () => {
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 {lang === "hi" ? "बातचीत शुरू करने के लिए कोई चैट चुनें।" : "Select a chat to start messaging."}
               </p>
-              <div className="flex justify-center gap-2.5 pt-1">
+              <div className="flex flex-wrap justify-center gap-2.5 pt-1">
                 <button
                   type="button"
                   onClick={() => setIsNewChatOpen(true)}
@@ -371,7 +519,10 @@ export const AppContent: React.FC = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setIsRadarOpen(true)}
+                  onClick={() => {
+                    setRadarInitialTab("NEARBY");
+                    setIsRadarOpen(true);
+                  }}
                   className="px-4 py-2.5 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded-xl text-xs font-bold flex items-center space-x-1.5"
                 >
                   <Radar className="w-4 h-4" />
@@ -415,9 +566,7 @@ export const AppContent: React.FC = () => {
         onClose={() => setViewingUser(null)}
         user={viewingUser}
         onStartCall={
-          activeConversation?.type === "DIRECT"
-            ? (isVid) => handleStartCall(isVid)
-            : undefined
+          activeConversation?.type === "DIRECT" ? (isVid) => handleStartCall(isVid) : undefined
         }
         onMessageUser={handleMessageUserById}
       />

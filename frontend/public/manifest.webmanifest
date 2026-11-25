@@ -1,0 +1,17 @@
+{
+  "name": "Zust Talk",
+  "short_name": "Zust Talk",
+  "description": "Fast, Secure Messenger & Nearby Radar",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#059669",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'><rect width='128' height='128' rx='28' fill='%23059669'/><path fill='%23ffffff' d='M98 32H30c-4.4 0-8 3.6-8 8v58l16-16h60c4.4 0 8-3.6 8-8V40c0-4.4-3.6-8-8-8z'/></svg>",
+      "sizes": "128x128",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
