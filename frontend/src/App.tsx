@@ -328,7 +328,73 @@ export const AppContent: React.FC = () => {
         .catch(() => {});
     };
 
+    const handleConversationRead = ({
+      conversationId,
+      userId: readerId,
+      readAt,
+    }: {
+      conversationId: string;
+      userId: string;
+      readAt: string;
+    }) => {
+      if (readerId === user.id) return;
+      setConversations((prev) =>
+        prev.map((conv) => {
+          if (conv.id !== conversationId || !conv.messages?.length) return conv;
+          return {
+            ...conv,
+            messages: conv.messages.map((m) => {
+              if (m.senderId !== user.id) return m;
+              const receipts = m.receipts || [];
+              const hasReader = receipts.some((r) => r.userId === readerId);
+              return {
+                ...m,
+                receipts: hasReader
+                  ? receipts.map((r) => (r.userId === readerId ? { ...r, deliveredAt: r.deliveredAt || readAt, readAt: r.readAt || readAt } : r))
+                  : [...receipts, { id: `read-${readerId}`, messageId: m.id, userId: readerId, deliveredAt: readAt, readAt }],
+              };
+            }),
+          };
+        })
+      );
+    };
+
+    const handleMessageReceipt = ({
+      conversationId,
+      messageId,
+      userId: readerId,
+      readAt,
+    }: {
+      conversationId?: string;
+      messageId: string;
+      userId: string;
+      readAt: string;
+    }) => {
+      if (readerId === user.id) return;
+      setConversations((prev) =>
+        prev.map((conv) => {
+          if ((conversationId && conv.id !== conversationId) || !conv.messages?.length) return conv;
+          return {
+            ...conv,
+            messages: conv.messages.map((m) => {
+              if (m.id !== messageId) return m;
+              const receipts = m.receipts || [];
+              const hasReader = receipts.some((r) => r.userId === readerId);
+              return {
+                ...m,
+                receipts: hasReader
+                  ? receipts.map((r) => (r.userId === readerId ? { ...r, deliveredAt: r.deliveredAt || readAt, readAt: r.readAt || readAt } : r))
+                  : [...receipts, { id: `read-${readerId}`, messageId: m.id, userId: readerId, deliveredAt: readAt, readAt }],
+              };
+            }),
+          };
+        })
+      );
+    };
+
     socket.on("conversation:updated", handleConversationUpdated);
+    socket.on("conversation:read", handleConversationRead);
+    socket.on("message:receipt", handleMessageReceipt);
     socket.on("message:new", handleNewMessageNotif);
     socket.on("user:updated", handleConversationUpdated);
     socket.on("call:incoming", handleIncomingCall);
@@ -339,6 +405,8 @@ export const AppContent: React.FC = () => {
 
     return () => {
       socket.off("conversation:updated", handleConversationUpdated);
+      socket.off("conversation:read", handleConversationRead);
+      socket.off("message:receipt", handleMessageReceipt);
       socket.off("message:new", handleNewMessageNotif);
       socket.off("user:updated", handleConversationUpdated);
       socket.off("call:incoming", handleIncomingCall);
@@ -494,30 +562,30 @@ export const AppContent: React.FC = () => {
             lang={lang}
           />
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center p-8 bg-slate-50 dark:bg-slate-950 text-center">
-            <div className="max-w-sm space-y-4">
-              <div className="w-16 h-16 bg-gradient-to-tr from-emerald-500 to-teal-500 text-white rounded-3xl flex items-center justify-center mx-auto shadow-lg shadow-emerald-600/20">
-                <MessageSquare className="w-8 h-8" />
+          <div className="flex-1 flex flex-col items-center justify-center p-8 chat-bg-pattern text-center">
+            <div className="max-w-sm w-full bg-white/85 dark:bg-slate-900/85 backdrop-blur-xl border border-slate-200/70 dark:border-slate-800/80 rounded-3xl p-7 shadow-xl space-y-4">
+              <div className="w-14 h-14 bg-gradient-to-tr from-emerald-500 to-teal-500 text-white rounded-2xl flex items-center justify-center mx-auto shadow-lg shadow-emerald-600/20">
+                <MessageSquare className="w-7 h-7" />
               </div>
-              <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100">{t.appName}</h2>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                {lang === "hi" ? "बातचीत शुरू करने के लिए कोई चैट चुनें।" : "Select a chat to start messaging."}
+              <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100">{t.appName}</h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                {lang === "hi" ? "बातचीत शुरू करने के लिए कोई चैट चुनें।" : "Select a chat or search anyone to start messaging."}
               </p>
-              <div className="flex flex-wrap justify-center gap-2.5 pt-1">
+              <div className="flex flex-wrap justify-center gap-2 pt-1">
                 <button
                   type="button"
                   onClick={() => setIsNewChatOpen(true)}
-                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 shadow-sm"
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 shadow-sm transition-colors"
                 >
-                  <Plus className="w-4 h-4" />
+                  <Plus className="w-3.5 h-3.5" />
                   <span>{t.startNewChat}</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setIsInviteOpen(true)}
-                  className="px-4 py-2.5 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold flex items-center space-x-1.5"
+                  className="px-3.5 py-2 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200/80 dark:border-slate-700 rounded-xl text-xs font-semibold flex items-center space-x-1.5 transition-colors"
                 >
-                  <QrCode className="w-4 h-4 text-emerald-600" />
+                  <QrCode className="w-3.5 h-3.5 text-emerald-600" />
                   <span>QR & Scan</span>
                 </button>
                 <button
@@ -526,9 +594,9 @@ export const AppContent: React.FC = () => {
                     setRadarInitialTab("NEARBY");
                     setIsRadarOpen(true);
                   }}
-                  className="px-4 py-2.5 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded-xl text-xs font-bold flex items-center space-x-1.5"
+                  className="px-3.5 py-2 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-colors"
                 >
-                  <Radar className="w-4 h-4" />
+                  <Radar className="w-3.5 h-3.5" />
                   <span>Nearby Radar</span>
                 </button>
               </div>

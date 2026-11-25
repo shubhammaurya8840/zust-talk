@@ -447,6 +447,15 @@ describe("India Chat Backend API Tests", () => {
     });
     expect(readRes.status).toBe(200);
 
+    // Verify Sidebar conversations list includes readAt receipt on last message
+    const convListAfterRead = await fetch(`${baseUrl}/api/conversations`, {
+      headers: { Authorization: `Bearer ${user1Token}` }
+    });
+    expect(convListAfterRead.status).toBe(200);
+    const convListData = await convListAfterRead.json();
+    const targetConv = convListData.conversations.find((c: any) => c.id === directConvId);
+    expect(targetConv.messages[0].receipts.some((r: any) => r.userId === user2Id && Boolean(r.readAt))).toBe(true);
+
     // Remove
     const deleteRes = await fetch(`${baseUrl}/api/messages/${messageId}`, {
       method: "DELETE",

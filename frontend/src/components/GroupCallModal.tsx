@@ -58,12 +58,19 @@ const RemoteTile: React.FC<{
     const stream = participant.stream;
     if (!stream) return;
     setHasVideoTrack(stream.getVideoTracks().some((t) => t.enabled && t.readyState === "live"));
-    if (videoRef.current && videoRef.current.srcObject !== stream) {
-      videoRef.current.srcObject = stream;
+    if (videoRef.current) {
+      videoRef.current.muted = true;
+      videoRef.current.volume = 0;
+      if (videoRef.current.srcObject !== stream) {
+        videoRef.current.srcObject = stream;
+      }
       videoRef.current.play().catch(() => {});
     }
-    if (audioRef.current && audioRef.current.srcObject !== stream) {
-      audioRef.current.srcObject = stream;
+    if (audioRef.current) {
+      if (audioRef.current.srcObject !== stream) {
+        audioRef.current.srcObject = stream;
+      }
+      audioRef.current.volume = 0.85;
       audioRef.current.play().catch(() => {});
     }
   }, [participant.stream]);
@@ -75,6 +82,8 @@ const RemoteTile: React.FC<{
         ref={videoRef}
         autoPlay
         playsInline
+        muted
+        onLoadedData={() => setHasVideoTrack(true)}
         className={`w-full h-full ${isZoomFill ? "object-cover" : "object-contain"} ${
           isVideoCall && hasVideoTrack ? "block" : "hidden"
         }`}
@@ -191,11 +200,23 @@ export const GroupCallModal: React.FC<GroupCallModalProps> = ({
       let stream: MediaStream;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
+          audio: {
+            echoCancellation: { ideal: true },
+            noiseSuppression: { ideal: true },
+            autoGainControl: { ideal: true },
+            channelCount: 1,
+          },
           video: groupCall.isVideo ? { facingMode: "user", width: { ideal: 960 }, height: { ideal: 720 } } : false,
         });
       } catch {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: { ideal: true },
+            noiseSuppression: { ideal: true },
+            autoGainControl: { ideal: true },
+          },
+          video: false,
+        });
         setIsVideoOff(true);
       }
 

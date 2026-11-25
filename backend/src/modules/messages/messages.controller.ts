@@ -170,9 +170,19 @@ export async function markRead(req: Request, res: Response) {
   const message = await prisma.message.findUnique({ where: { id: messageId } });
   if (!message) throw new HttpError(404, "Message not found");
   await ensureMember(message.conversationId, req.auth!.userId);
-  await prisma.messageReceipt.updateMany({ where: { messageId: message.id, userId: req.auth!.userId }, data: { deliveredAt: new Date(), readAt: new Date() } });
-  await prisma.conversationMember.updateMany({ where: { conversationId: message.conversationId, userId: req.auth!.userId }, data: { lastReadAt: new Date() } });
-  if (io) io.to(`conversation:${message.conversationId}`).emit("message:receipt", { messageId: message.id, userId: req.auth!.userId, readAt: new Date() });
+  const now = new Date();
+  if (message.senderId !== req.auth!.userId) {
+    await prisma.messageReceipt.updateMany({ where: { messageId: message.id, userId: req.auth!.userId }, data: { deliveredAt: now, readAt: now } });
+  }
+  await prisma.conversationMember.updateMany({ where: { conversationId: message.conversationId, userId: req.auth!.userId }, data: { lastReadAt: now } });
+  if (io) {
+    const payload = { conversationId: message.conversationId, messageId: message.id, userId: req.auth!.userId, readAt: now };
+    io.to(`conversation:${message.conversationId}`).emit("message:receipt", payload);
+    const members = await prisma.conversationMember.findMany({ where: { conversationId: message.conversationId }, select: { userId: true } });
+    for (const m of members) {
+      io.to(`user:${m.userId}`).emit("message:receipt", payload);
+    }
+  }
   res.json({ success: true });
 }
 
@@ -183,7 +193,7 @@ export async function markConversationRead(req: Request, res: Response) {
 
   await prisma.messageReceipt.updateMany({
     where: {
-      message: { conversationId },
+      message: { conversationId, senderId: { not: req.auth!.userId } },
       userId: req.auth!.userId,
       readAt: null
     },
@@ -196,11 +206,19 @@ export async function markConversationRead(req: Request, res: Response) {
   });
 
   if (io) {
-    io.to(`conversation:${conversationId}`).emit("conversation:read", {
+    const payload = {
       conversationId,
       userId: req.auth!.userId,
       readAt: now
+    };
+    io.to(`conversation:${conversationId}`).emit("conversation:read", payload);
+    const members = await prisma.conversationMember.findMany({
+      where: { conversationId },
+      select: { userId: true }
     });
+    for (const m of members) {
+      io.to(`user:${m.userId}`).emit("conversation:read", payload);
+    }
   }
 
   res.json({ success: true });

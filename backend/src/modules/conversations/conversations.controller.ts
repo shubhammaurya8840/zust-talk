@@ -40,7 +40,7 @@ export async function list(req: Request, res: Response) {
     where: { members: { some: { userId: req.auth!.userId } } },
     include: {
       members: { include: { user: { select: userPublicSelect } } },
-      messages: { orderBy: { createdAt: "desc" }, take: 1 }
+      messages: { orderBy: { createdAt: "desc" }, take: 1, include: { receipts: true, attachments: true } }
     },
     orderBy: { updatedAt: "desc" }
   });
@@ -54,7 +54,7 @@ export async function getById(req: Request, res: Response) {
     where: { id: conversationId },
     include: {
       members: { include: { user: { select: userPublicSelect } } },
-      messages: { orderBy: { createdAt: "desc" }, take: 1 }
+      messages: { orderBy: { createdAt: "desc" }, take: 1, include: { receipts: true, attachments: true } }
     }
   });
   if (!conversation) throw new HttpError(404, "Conversation not found");

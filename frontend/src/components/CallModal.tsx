@@ -45,7 +45,16 @@ const RTC_CONFIG: RTCConfiguration = {
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
+    { urls: "stun:stun3.l.google.com:19302" },
+    { urls: "stun:stun.cloudflare.com:3478" },
   ],
+};
+
+const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+  echoCancellation: { ideal: true },
+  noiseSuppression: { ideal: true },
+  autoGainControl: { ideal: true },
+  channelCount: 1,
 };
 
 export const CallModal: React.FC<CallModalProps> = ({
@@ -67,19 +76,23 @@ export const CallModal: React.FC<CallModalProps> = ({
   const [isFlippingCamera, setIsFlippingCamera] = useState(false);
   const [isSwapped, setIsSwapped] = useState(false);
   const [isSpeakerOn, setIsSpeakerOn] = useState(true);
-  // Magnify / Zoom toggle: false = normal portrait/fit view (never over-zoomed on laptop); true = full edge-to-edge zoom fill
+  // Magnify / Zoom toggle: false = portrait/fit view; true = edge-to-edge full zoom
   const [isZoomFill, setIsZoomFill] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [callDuration, setCallDuration] = useState(0);
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const localVideoRef = useRef<HTMLVideoElement>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  // Fixed DOM refs (never swapped dynamically!) so <video> elements never lose srcObject on swap
+  const mainVideoRef = useRef<HTMLVideoElement>(null);
+  const pipVideoRef = useRef<HTMLVideoElement>(null);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
+
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const iceCandidateQueue = useRef<RTCIceCandidateInit[]>([]);
+  const pendingOfferRef = useRef<RTCSessionDescriptionInit | null>(null);
+  const pendingAcceptedRef = useRef<boolean>(false);
   const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const activeDeviceIdRef = useRef<string | undefined>(undefined);
 
@@ -105,7 +118,7 @@ export const CallModal: React.FC<CallModalProps> = ({
       const gain = ctx.createGain();
       osc.type = "sine";
       osc.frequency.setValueAtTime(isIncoming ? 440 : 400, ctx.currentTime);
-      gain.gain.setValueAtTime(0.06, ctx.currentTime);
+      gain.gain.setValueAtTime(0.05, ctx.currentTime);
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start();
@@ -127,36 +140,47 @@ export const CallModal: React.FC<CallModalProps> = ({
     } catch {}
   };
 
+  const bindVideoEl = (el: HTMLVideoElement | null, stream: MediaStream | null) => {
+    if (!el) return;
+    // Video elements stay strictly muted; ONLY remoteAudioRef outputs voice to prevent acoustic echo!
+    el.muted = true;
+    el.volume = 0;
+    if (el.srcObject !== stream) {
+      el.srcObject = stream;
+    }
+    if (stream) {
+      el.play().catch(() => {});
+    }
+  };
+
   const syncStreamsToElements = useCallback(() => {
     const localStream = localStreamRef.current;
     const remoteStream = remoteStreamRef.current;
 
-    if (localVideoRef.current && localStream) {
-      if (localVideoRef.current.srcObject !== localStream) {
-        localVideoRef.current.srcObject = localStream;
-      }
-      localVideoRef.current.play().catch(() => {});
-    }
+    const mainStream = isSwapped ? localStream : remoteStream;
+    const pipStream = isSwapped ? remoteStream : localStream;
 
-    if (remoteVideoRef.current && remoteStream) {
-      if (remoteVideoRef.current.srcObject !== remoteStream) {
-        remoteVideoRef.current.srcObject = remoteStream;
-      }
-      remoteVideoRef.current.play().catch(() => {});
-    }
+    bindVideoEl(mainVideoRef.current, mainStream);
+    bindVideoEl(pipVideoRef.current, pipStream);
 
-    if (remoteAudioRef.current && remoteStream) {
+    if (remoteAudioRef.current) {
       if (remoteAudioRef.current.srcObject !== remoteStream) {
         remoteAudioRef.current.srcObject = remoteStream;
       }
       remoteAudioRef.current.muted = !isSpeakerOn;
-      remoteAudioRef.current.play().catch(() => {});
+      // Slightly attenuated volume (0.85) prevents loudspeaker-to-mic acoustic echo when nearby
+      remoteAudioRef.current.volume = 0.85;
+      if (remoteStream) {
+        remoteAudioRef.current.play().catch(() => {});
+      }
     }
-  }, [isSpeakerOn]);
+  }, [isSwapped, isSpeakerOn]);
 
   useEffect(() => {
     syncStreamsToElements();
-  }, [isMinimized, hasVideoMode, isVideoDisabled, isSwapped, callStatus, isZoomFill, syncStreamsToElements]);
+    const raf = requestAnimationFrame(() => syncStreamsToElements());
+    return () => cancelAnimationFrame(raf);
+  }, [isMinimized, hasVideoMode, isVideoDisabled, isRemoteVideoOff, isSwapped, callStatus, isZoomFill, syncStreamsToElements]);
 
   const cleanUpCall = () => {
     stopRingingSound();
@@ -180,6 +204,8 @@ export const CallModal: React.FC<CallModalProps> = ({
       document.exitFullscreen().catch(() => {});
     }
     iceCandidateQueue.current = [];
+    pendingOfferRef.current = null;
+    pendingAcceptedRef.current = false;
   };
 
   const startTimer = () => {
@@ -187,6 +213,39 @@ export const CallModal: React.FC<CallModalProps> = ({
     timerIntervalRef.current = setInterval(() => {
       setCallDuration((prev) => prev + 1);
     }, 1000);
+  };
+
+  const sendOfferOnPc = async (pc: RTCPeerConnection, iceRestart = false) => {
+    if (!socket || !otherUser) return;
+    try {
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true,
+        iceRestart,
+      });
+      await pc.setLocalDescription(offer);
+      socket.emit("call:signal", {
+        toUserId: otherUser.id,
+        signal: offer,
+      });
+    } catch (err) {
+      console.error("Failed to create offer:", err);
+    }
+  };
+
+  const applyRemoteOffer = async (pc: RTCPeerConnection, offerSignal: RTCSessionDescriptionInit) => {
+    if (!socket || !otherUser) return;
+    await pc.setRemoteDescription(new RTCSessionDescription(offerSignal));
+    while (iceCandidateQueue.current.length > 0) {
+      const cand = iceCandidateQueue.current.shift();
+      if (cand) await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+    }
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    socket.emit("call:signal", {
+      toUserId: otherUser.id,
+      signal: answer,
+    });
   };
 
   const createPeerConnection = (stream: MediaStream): RTCPeerConnection => {
@@ -205,6 +264,14 @@ export const CallModal: React.FC<CallModalProps> = ({
       }
     };
 
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+        requestAnimationFrame(() => syncStreamsToElements());
+      } else if (pc.iceConnectionState === "failed" && !callState?.isIncoming) {
+        sendOfferOnPc(pc, true);
+      }
+    };
+
     pc.ontrack = (event) => {
       let rStream = remoteStreamRef.current;
       if (event.streams && event.streams[0]) {
@@ -220,11 +287,18 @@ export const CallModal: React.FC<CallModalProps> = ({
       if (event.track.kind === "video") {
         setHasVideoMode(true);
         setIsRemoteVideoOff(false);
-        event.track.onmute = () => setIsRemoteVideoOff(true);
-        event.track.onunmute = () => setIsRemoteVideoOff(false);
+        event.track.onunmute = () => {
+          setIsRemoteVideoOff(false);
+          syncStreamsToElements();
+        };
+        event.track.onended = () => {
+          const stillHasLive = rStream?.getVideoTracks().some((t) => t.readyState === "live" && t.enabled);
+          if (!stillHasLive) setIsRemoteVideoOff(true);
+        };
       }
 
       syncStreamsToElements();
+      requestAnimationFrame(() => syncStreamsToElements());
     };
 
     peerConnectionRef.current = pc;
@@ -233,7 +307,7 @@ export const CallModal: React.FC<CallModalProps> = ({
 
   const acquireInitialMedia = async (wantVideo: boolean): Promise<MediaStream> => {
     if (!wantVideo) {
-      return navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      return navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false });
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -242,7 +316,7 @@ export const CallModal: React.FC<CallModalProps> = ({
           width: { ideal: 1280 },
           height: { ideal: 720 },
         },
-        audio: true,
+        audio: AUDIO_CONSTRAINTS,
       });
       const vTrack = stream.getVideoTracks()[0];
       if (vTrack) activeDeviceIdRef.current = vTrack.getSettings().deviceId;
@@ -250,7 +324,7 @@ export const CallModal: React.FC<CallModalProps> = ({
     } catch {
       setIsVideoDisabled(true);
       showToast("Camera unavailable — joined with audio");
-      return navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      return navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false });
     }
   };
 
@@ -266,6 +340,8 @@ export const CallModal: React.FC<CallModalProps> = ({
     setIsZoomFill(false);
     setCallStatus("RINGING");
     setCallDuration(0);
+    pendingAcceptedRef.current = false;
+    pendingOfferRef.current = null;
     setStatusMessage(
       callState.isIncoming
         ? `Incoming ${initialVideo ? "Video" : "Audio"} Call...`
@@ -286,19 +362,10 @@ export const CallModal: React.FC<CallModalProps> = ({
 
       const pc = peerConnectionRef.current;
       if (pc) {
-        try {
-          const offer = await pc.createOffer({
-            offerToReceiveAudio: true,
-            offerToReceiveVideo: true,
-          });
-          await pc.setLocalDescription(offer);
-          socket.emit("call:signal", {
-            toUserId: otherUser.id,
-            signal: offer,
-          });
-        } catch (err) {
-          console.error("Failed to create offer:", err);
-        }
+        await sendOfferOnPc(pc);
+      } else {
+        // Outgoing media still initializing — flush offer automatically once ready
+        pendingAcceptedRef.current = true;
       }
     };
 
@@ -306,35 +373,35 @@ export const CallModal: React.FC<CallModalProps> = ({
       if (!signal) return;
       if (signal.type === "camera-state") {
         setIsRemoteVideoOff(!signal.enabled);
-        if (signal.enabled) setHasVideoMode(true);
+        if (signal.enabled) {
+          setHasVideoMode(true);
+          requestAnimationFrame(() => syncStreamsToElements());
+        }
         return;
       }
 
       const pc = peerConnectionRef.current;
-      if (!pc) return;
+      if (!pc) {
+        if (signal.type === "offer") {
+          pendingOfferRef.current = signal;
+        } else if (signal.candidate) {
+          iceCandidateQueue.current.push(signal.candidate);
+        }
+        return;
+      }
 
       try {
         if (signal.type === "offer") {
-          await pc.setRemoteDescription(new RTCSessionDescription(signal));
-          while (iceCandidateQueue.current.length > 0) {
-            const cand = iceCandidateQueue.current.shift();
-            if (cand) await pc.addIceCandidate(new RTCIceCandidate(cand));
-          }
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          socket.emit("call:signal", {
-            toUserId: otherUser.id,
-            signal: answer,
-          });
+          await applyRemoteOffer(pc, signal);
         } else if (signal.type === "answer") {
           await pc.setRemoteDescription(new RTCSessionDescription(signal));
           while (iceCandidateQueue.current.length > 0) {
             const cand = iceCandidateQueue.current.shift();
-            if (cand) await pc.addIceCandidate(new RTCIceCandidate(cand));
+            if (cand) await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
           }
         } else if (signal.candidate) {
           if (pc.remoteDescription && pc.remoteDescription.type) {
-            await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+            await pc.addIceCandidate(new RTCIceCandidate(signal.candidate)).catch(() => {});
           } else {
             iceCandidateQueue.current.push(signal.candidate);
           }
@@ -383,7 +450,7 @@ export const CallModal: React.FC<CallModalProps> = ({
       const stream = await acquireInitialMedia(wantVideo);
       localStreamRef.current = stream;
       syncStreamsToElements();
-      createPeerConnection(stream);
+      const pc = createPeerConnection(stream);
 
       socket?.emit("call:initiate", {
         toUserId: otherUser?.id,
@@ -392,6 +459,11 @@ export const CallModal: React.FC<CallModalProps> = ({
         isVideo: wantVideo,
         conversationId: callState?.conversationId,
       });
+
+      if (pendingAcceptedRef.current) {
+        pendingAcceptedRef.current = false;
+        await sendOfferOnPc(pc);
+      }
     } catch {
       setStatusMessage("Could not access microphone/camera.");
       setTimeout(() => {
@@ -412,7 +484,13 @@ export const CallModal: React.FC<CallModalProps> = ({
       const stream = await acquireInitialMedia(wantVideo);
       localStreamRef.current = stream;
       syncStreamsToElements();
-      createPeerConnection(stream);
+      const pc = createPeerConnection(stream);
+
+      if (pendingOfferRef.current) {
+        const queuedOffer = pendingOfferRef.current;
+        pendingOfferRef.current = null;
+        await applyRemoteOffer(pc, queuedOffer);
+      }
 
       socket?.emit("call:accept", { toUserId: otherUser?.id });
     } catch {
@@ -455,6 +533,7 @@ export const CallModal: React.FC<CallModalProps> = ({
       liveTrack.enabled = nextEnabled;
       setIsVideoDisabled(!nextEnabled);
       setHasVideoMode(true);
+      syncStreamsToElements();
       socket?.emit("call:signal", {
         toUserId: otherUser?.id,
         signal: { type: "camera-state", enabled: nextEnabled },
@@ -474,12 +553,7 @@ export const CallModal: React.FC<CallModalProps> = ({
       localStreamRef.current.addTrack(newTrack);
       setHasVideoMode(true);
       setIsVideoDisabled(false);
-
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = null;
-        localVideoRef.current.srcObject = localStreamRef.current;
-        localVideoRef.current.play().catch(() => {});
-      }
+      syncStreamsToElements();
 
       const pc = peerConnectionRef.current;
       if (pc) {
@@ -489,9 +563,7 @@ export const CallModal: React.FC<CallModalProps> = ({
         } else {
           pc.addTrack(newTrack, localStreamRef.current);
           if (callStatus === "CONNECTED" && otherUser) {
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            socket?.emit("call:signal", { toUserId: otherUser.id, signal: offer });
+            await sendOfferOnPc(pc);
           }
         }
       }
@@ -558,12 +630,7 @@ export const CallModal: React.FC<CallModalProps> = ({
       setFacingMode(resolvedFacing);
       setIsVideoDisabled(false);
       setHasVideoMode(true);
-
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = null;
-        localVideoRef.current.srcObject = localStreamRef.current;
-        localVideoRef.current.play().catch(() => {});
-      }
+      syncStreamsToElements();
 
       const pc = peerConnectionRef.current;
       if (pc) {
@@ -573,9 +640,7 @@ export const CallModal: React.FC<CallModalProps> = ({
         } else {
           pc.addTrack(newTrack, localStreamRef.current);
           if (callStatus === "CONNECTED" && otherUser) {
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            socket?.emit("call:signal", { toUserId: otherUser.id, signal: offer });
+            await sendOfferOnPc(pc);
           }
         }
       }
@@ -592,7 +657,6 @@ export const CallModal: React.FC<CallModalProps> = ({
     }
   };
 
-  // Magnify toggle: switches between Portrait/Fit (no zoom crop on laptop!) and Full Zoomed Fill
   const handleToggleZoom = async () => {
     const nextZoom = !isZoomFill;
     setIsZoomFill(nextZoom);
@@ -606,8 +670,10 @@ export const CallModal: React.FC<CallModalProps> = ({
   const handleToggleSpeaker = () => {
     const next = !isSpeakerOn;
     setIsSpeakerOn(next);
-    if (remoteAudioRef.current) remoteAudioRef.current.muted = !next;
-    if (remoteVideoRef.current) remoteVideoRef.current.muted = !next;
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.muted = !next;
+      remoteAudioRef.current.volume = 0.85;
+    }
   };
 
   const formatDuration = (seconds: number) => {
@@ -620,7 +686,16 @@ export const CallModal: React.FC<CallModalProps> = ({
 
   const displayName = otherUser.displayName || otherUser.username;
 
+  // Single audio output channel — eliminates acoustic echo from dual playback!
   const hiddenAudioElement = <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />;
+
+  const showMainOverlay =
+    (!isSwapped && (callStatus !== "CONNECTED" || isRemoteVideoOff)) ||
+    (isSwapped && isVideoDisabled);
+
+  const showPipOverlay =
+    (!isSwapped && isVideoDisabled) ||
+    (isSwapped && (callStatus !== "CONNECTED" || isRemoteVideoOff));
 
   if (isMinimized) {
     return (
@@ -672,25 +747,24 @@ export const CallModal: React.FC<CallModalProps> = ({
               }`}
             >
               <video
-                ref={isSwapped ? localVideoRef : remoteVideoRef}
+                ref={mainVideoRef}
                 autoPlay
                 playsInline
-                muted={isSwapped || !isSpeakerOn}
+                muted
+                onLoadedData={() => {
+                  if (!isSwapped) setIsRemoteVideoOff(false);
+                }}
+                onPlaying={() => {
+                  if (!isSwapped) setIsRemoteVideoOff(false);
+                }}
                 className={`w-full h-full transition-opacity duration-300 ${
-                  isZoomFill ? "object-cover" : "object-contain md:object-cover"
-                } ${
-                  isSwapped
-                    ? !isVideoDisabled
-                      ? `opacity-100 ${facingMode === "user" ? "mirror" : ""}`
-                      : "opacity-0"
-                    : callStatus === "CONNECTED" && !isRemoteVideoOff
-                    ? "opacity-100"
-                    : "opacity-0"
+                  isZoomFill ? "object-cover" : "object-cover md:object-cover"
+                } ${isSwapped && facingMode === "user" ? "mirror" : ""} ${
+                  showMainOverlay ? "opacity-0" : "opacity-100"
                 }`}
               />
 
-              {((!isSwapped && (callStatus !== "CONNECTED" || isRemoteVideoOff)) ||
-                (isSwapped && isVideoDisabled)) && (
+              {showMainOverlay && (
                 <div className="absolute inset-0 z-10 flex flex-col items-center justify-center space-y-4 px-6 text-center bg-slate-900/70">
                   <UserAvatar
                     name={isSwapped ? currentUser.displayName : displayName}
@@ -711,30 +785,26 @@ export const CallModal: React.FC<CallModalProps> = ({
               )}
             </div>
 
-            {/* Floating PiP */}
+            {/* Floating Self / Peer PiP */}
             <div
               onClick={() => setIsSwapped((prev) => !prev)}
               title="Tap to swap screen"
               className="absolute bottom-28 sm:bottom-32 right-4 z-20 w-24 h-36 sm:w-36 sm:h-52 rounded-2xl overflow-hidden shadow-2xl border-2 border-white/25 bg-slate-900 cursor-pointer transition-transform hover:scale-[1.03]"
             >
               <video
-                ref={isSwapped ? remoteVideoRef : localVideoRef}
+                ref={pipVideoRef}
                 autoPlay
                 playsInline
-                muted={!isSwapped || !isSpeakerOn}
+                muted
+                onLoadedData={() => {
+                  if (isSwapped) setIsRemoteVideoOff(false);
+                }}
                 className={`w-full h-full object-cover ${
-                  !isSwapped
-                    ? !isVideoDisabled
-                      ? `block ${facingMode === "user" ? "mirror" : ""}`
-                      : "hidden"
-                    : callStatus === "CONNECTED" && !isRemoteVideoOff
-                    ? "block"
-                    : "hidden"
-                }`}
+                  !isSwapped && facingMode === "user" ? "mirror" : ""
+                } ${showPipOverlay ? "hidden" : "block"}`}
               />
 
-              {((!isSwapped && isVideoDisabled) ||
-                (isSwapped && (callStatus !== "CONNECTED" || isRemoteVideoOff))) && (
+              {showPipOverlay && (
                 <div className="w-full h-full flex flex-col items-center justify-center bg-slate-800/90 p-2 text-center">
                   <UserAvatar
                     name={isSwapped ? displayName : currentUser.displayName}
@@ -810,7 +880,6 @@ export const CallModal: React.FC<CallModalProps> = ({
             </div>
           </div>
 
-          {/* Magnify / Zoom Toggle Button */}
           {hasVideoMode && (
             <button
               type="button"

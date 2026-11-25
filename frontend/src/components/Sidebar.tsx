@@ -5,7 +5,6 @@ import { useSocket } from "../context/SocketContext";
 import { Language, translations } from "../utils/i18n";
 import { UserAvatar } from "../utils/avatars";
 import {
-  MessageSquarePlus,
   Users,
   Search,
   LogOut,
@@ -111,9 +110,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   return (
-    <div className="relative h-full min-h-0 flex flex-col bg-white dark:bg-slate-900 border-r border-slate-200/80 dark:border-slate-800 w-full md:w-80 lg:w-96 shrink-0">
-      {/* Clean Minimal Top Header: Avatar (opens Settings), Night Mode, QR Scanner, New Chat, 3-Dot Menu */}
-      <div className="shrink-0 px-3.5 py-3 bg-slate-50/80 dark:bg-slate-900 border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-2 relative z-30">
+    <div className="relative h-full min-h-0 flex flex-col bg-white/95 dark:bg-slate-900 border-r border-slate-200/70 dark:border-slate-800/80 w-full md:w-80 lg:w-96 shrink-0">
+      {/* Lightweight Aesthetic Header: Avatar (opens Settings), Night Mode, QR Scanner, Nearby Radar (swapped to top), 3-Dot Menu */}
+      <div className="shrink-0 px-3.5 py-2.5 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-100 dark:border-slate-800/80 flex items-center justify-between gap-2 relative z-30">
         <div
           className="flex items-center space-x-2.5 cursor-pointer min-w-0 flex-1 group"
           onClick={onOpenProfile}
@@ -158,14 +157,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <QrCode className="w-4 h-4" />
           </button>
 
-          <button
-            type="button"
-            onClick={onNewChat}
-            title={t.startNewChat}
-            className="p-2 text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors shadow-sm"
-          >
-            <MessageSquarePlus className="w-4 h-4" />
-          </button>
+          {onOpenRadar && (
+            <button
+              type="button"
+              onClick={onOpenRadar}
+              title="Nearby Radar (100m)"
+              aria-label="Open Nearby Radar"
+              className={`relative p-2 rounded-xl transition-all ${
+                isRadarActive
+                  ? "bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-500/30"
+                  : "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/50"
+              }`}
+            >
+              <Radar className="w-4 h-4" />
+              {pendingRadarRequests > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-amber-400 text-slate-950 text-[9px] font-extrabold flex items-center justify-center shadow">
+                  {pendingRadarRequests}
+                </span>
+              )}
+            </button>
+          )}
 
           {/* Three-Dot Overflow Menu: Settings, Security/Encryption, Notifications, Logout */}
           <div className="relative">
@@ -335,7 +346,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             const otherUser = getOtherUser(c);
             const lastMsg = c.messages?.[0];
             const isMyLastMsg = lastMsg?.senderId === user?.id;
-            const isRead = lastMsg?.receipts?.some((r) => r.readAt);
+            const otherReceipts = (lastMsg?.receipts || []).filter((r) => r.userId !== user?.id);
+            const isRead = otherReceipts.length > 0 && otherReceipts.some((r) => Boolean(r.readAt));
             const archived = isArchivedForMe(c);
 
             const livePresence = otherUser ? presenceMap[otherUser.id] : undefined;
@@ -414,27 +426,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
       </div>
 
-      {/* Floating Round Nearby Radar Button at Bottom-Right (Visible on Mobile & Desktop) */}
-      {onOpenRadar && (
-        <button
-          type="button"
-          onClick={onOpenRadar}
-          title="Nearby Radar (100m)"
-          aria-label="Open Nearby Radar"
-          className={`fixed md:absolute bottom-5 right-5 z-30 w-14 h-14 rounded-full flex items-center justify-center shadow-2xl transition-all hover:scale-105 active:scale-95 border-2 ${
-            isRadarActive
-              ? "bg-slate-900 dark:bg-emerald-500 text-white border-emerald-400 ring-4 ring-emerald-500/30"
-              : "bg-gradient-to-tr from-emerald-500 to-teal-600 text-white border-white/90 dark:border-slate-800 shadow-emerald-600/40"
-          }`}
-        >
-          <Radar className="w-6 h-6" />
-          {pendingRadarRequests > 0 && (
-            <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1 rounded-full bg-amber-400 text-slate-950 text-[10px] font-extrabold flex items-center justify-center shadow">
-              {pendingRadarRequests}
-            </span>
-          )}
-        </button>
-      )}
+      {/* Floating Round Search Everyone & Start New Chat Button at Bottom-Right */}
+      <button
+        type="button"
+        onClick={onNewChat}
+        title="Search Users & Start New Chat"
+        aria-label="Search Users & Start New Chat"
+        className="fixed md:absolute bottom-5 right-5 z-30 w-14 h-14 rounded-full flex items-center justify-center shadow-xl shadow-emerald-600/30 transition-all hover:scale-105 active:scale-95 bg-gradient-to-tr from-emerald-500 to-teal-600 text-white border-2 border-white/90 dark:border-slate-800"
+      >
+        <Search className="w-6 h-6" />
+      </button>
     </div>
   );
 };

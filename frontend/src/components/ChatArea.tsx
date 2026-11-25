@@ -42,9 +42,10 @@ import {
 } from "lucide-react";
 
 const QUICK_EMOJIS = [
-  "😀", "😂", "❤️", "🙏", "🔥", "👍",
-  "🎉", "😍", "👌", "🤝", "🥳", "✨",
-  "🙌", "😎", "💯", "😢", "🤔", "🇮🇳",
+  "😀", "😂", "😍", "🥹", "😎", "🥳",
+  "❤️", "🔥", "👍", "👏", "🙏", "🤝",
+  "👌", "✨", "💯", "🎉", "🤔", "😢",
+  "😡", "😱", "😴", "🤗", "🤩", "🇮🇳",
 ];
 
 interface ChatAreaProps {
@@ -194,8 +195,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       });
   };
 
-  // Screenshot & Screen Recording Detection + View-Once Blur Protection
+  // Screenshot & Screen Recording Detection + View-Once Blur Protection + Read Sync
   useEffect(() => {
+    let blurStartedAt = 0;
+    let blurWhileVisible = false;
+    let hiddenStartedAt = 0;
+
     const checkKeyEvent = (e: KeyboardEvent) => {
       const key = (e.key || "").toLowerCase();
       if (e.metaKey || e.shiftKey || e.altKey || key === "meta" || key === "os" || key === "shift") {
@@ -233,11 +238,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       if (document.activeElement?.tagName === "SELECT") return;
 
       if (document.visibilityState === "visible") {
+        blurStartedAt = Date.now();
+        blurWhileVisible = true;
         if (Date.now() - lastModifierAtRef.current < 1500) {
           triggerSecurityAlert("screenshot");
+          blurWhileVisible = false;
           return;
         }
-        // Catch OS snipping overlay / mobile quick-settings screenshot/record panel floating above visible tab
+        // Catch desktop Snipping Tool or mobile screenshot / quick-settings overlay hovering over visible tab
         overlayTimerRef.current = setTimeout(() => {
           overlayTimerRef.current = null;
           if (
@@ -246,8 +254,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             Date.now() >= suppressAlertUntilRef.current
           ) {
             triggerSecurityAlert("screenshot");
+            blurWhileVisible = false;
           }
-        }, 450);
+        }, 240);
       }
     };
 
@@ -257,14 +266,48 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         clearTimeout(overlayTimerRef.current);
         overlayTimerRef.current = null;
       }
+      if (!document.hidden && document.visibilityState === "visible") {
+        api.messages.markConversationRead(conversation.id).catch(() => {});
+      }
+      // Catch ultra-fast mobile screenshot / floating overlay flash (< 240ms) that briefly stole focus while visible
+      if (blurWhileVisible) {
+        const elapsed = Date.now() - blurStartedAt;
+        blurWhileVisible = false;
+        if (
+          elapsed >= 35 &&
+          elapsed <= 4500 &&
+          document.visibilityState === "visible" &&
+          Date.now() >= suppressAlertUntilRef.current &&
+          lastAlertSentRef.current < blurStartedAt
+        ) {
+          triggerSecurityAlert("screenshot");
+        }
+      }
     };
 
     const handleVis = () => {
       const hidden = document.visibilityState === "hidden";
       setIsWindowBlurred(hidden);
-      if (hidden && overlayTimerRef.current) {
-        clearTimeout(overlayTimerRef.current);
-        overlayTimerRef.current = null;
+      if (hidden) {
+        hiddenStartedAt = Date.now();
+        blurWhileVisible = false;
+        if (overlayTimerRef.current) {
+          clearTimeout(overlayTimerRef.current);
+          overlayTimerRef.current = null;
+        }
+      } else {
+        api.messages.markConversationRead(conversation.id).catch(() => {});
+        if (hiddenStartedAt > 0) {
+          const hiddenElapsed = Date.now() - hiddenStartedAt;
+          hiddenStartedAt = 0;
+          if (
+            hiddenElapsed >= 60 &&
+            hiddenElapsed <= 1700 &&
+            Date.now() >= suppressAlertUntilRef.current
+          ) {
+            triggerSecurityAlert("screenshot");
+          }
+        }
       }
     };
 
@@ -378,7 +421,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       setLoading(true);
       const res = await api.messages.getHistory(conversation.id);
       setMessages(res.messages);
-      api.messages.markConversationRead(conversation.id).catch(() => {});
+      if (!document.hidden && document.visibilityState === "visible") {
+        api.messages.markConversationRead(conversation.id).catch(() => {});
+      }
     } catch (err) {
       console.error("Failed to load message history:", err);
     } finally {
@@ -421,7 +466,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             setSecurityBanner((curr) => (curr === msg.body ? null : curr));
           }, 5000);
         }
-        if (msg.senderId !== user?.id && msg.type !== "SYSTEM") {
+        if (msg.senderId !== user?.id && msg.type !== "SYSTEM" && !document.hidden && document.visibilityState === "visible") {
           api.messages.markConversationRead(conversation.id).catch(() => {});
         }
       }
@@ -439,17 +484,28 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       );
     };
 
-    const handleReceipt = ({ messageId, readAt }: { messageId: string; readAt: string }) => {
+    const handleReceipt = ({
+      messageId,
+      userId: readerId,
+      readAt,
+    }: {
+      messageId: string;
+      userId: string;
+      readAt: string;
+    }) => {
+      if (readerId === user?.id) return;
       setMessages((prev) =>
         prev.map((m) => {
           if (m.id === messageId) {
             const receipts = m.receipts || [];
+            const hasReader = receipts.some((r) => r.userId === readerId);
             return {
               ...m,
-              receipts:
-                receipts.length > 0
-                  ? receipts.map((r) => ({ ...r, readAt: r.readAt || readAt, deliveredAt: r.deliveredAt || readAt }))
-                  : [{ id: "temp", messageId: m.id, userId: "other", deliveredAt: readAt, readAt }],
+              receipts: hasReader
+                ? receipts.map((r) =>
+                    r.userId === readerId ? { ...r, readAt: r.readAt || readAt, deliveredAt: r.deliveredAt || readAt } : r
+                  )
+                : [...receipts, { id: `temp-${readerId}`, messageId: m.id, userId: readerId, deliveredAt: readAt, readAt }],
             };
           }
           return m;
@@ -466,19 +522,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       userId: string;
       readAt: string;
     }) => {
-      if (cId === conversation.id) {
+      if (cId === conversation.id && readerId !== user?.id) {
         setMessages((prev) =>
           prev.map((m) => {
             if (m.senderId === user?.id) {
               const currentReceipts = m.receipts || [];
-              const updatedReceipts =
-                currentReceipts.length > 0
-                  ? currentReceipts.map((r) => ({
-                      ...r,
-                      readAt: r.readAt || readAt,
-                      deliveredAt: r.deliveredAt || readAt,
-                    }))
-                  : [{ id: "temp", messageId: m.id, userId: readerId, deliveredAt: readAt, readAt }];
+              const hasReader = currentReceipts.some((r) => r.userId === readerId);
+              const updatedReceipts = hasReader
+                ? currentReceipts.map((r) =>
+                    r.userId === readerId
+                      ? { ...r, readAt: r.readAt || readAt, deliveredAt: r.deliveredAt || readAt }
+                      : r
+                  )
+                : [...currentReceipts, { id: `temp-${readerId}`, messageId: m.id, userId: readerId, deliveredAt: readAt, readAt }];
               return { ...m, receipts: updatedReceipts };
             }
             return m;
@@ -1025,7 +1081,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
             const isMe = m.senderId === user?.id;
             const isDeleted = Boolean(m.deletedAt);
-            const isRead = m.receipts?.some((r) => r.readAt);
+            const otherReceipts = (m.receipts || []).filter((r) => r.userId !== user?.id);
+            const isRead = otherReceipts.length > 0 && otherReceipts.some((r) => Boolean(r.readAt));
             const isActionOpen = selectedMsgId === m.id;
             const repliedMsg = m.replyToId ? messages.find((prev) => prev.id === m.replyToId) : undefined;
             const isViewOnce = Boolean(m.isViewOnce);
@@ -1405,15 +1462,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       )}
 
       {/* Pinned Bottom Composer */}
-      <div className="shrink-0 px-2.5 sm:px-3.5 pt-2 pb-[max(0.6rem,env(safe-area-inset-bottom))] bg-white dark:bg-slate-900 border-t border-slate-200/90 dark:border-slate-800 relative">
+      <div className="shrink-0 px-2 sm:px-3.5 pt-2 pb-[max(0.65rem,env(safe-area-inset-bottom))] bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200/70 dark:border-slate-800/80 relative">
         {emojiOpen && (
-          <div className="absolute bottom-full left-3 mb-2 p-2.5 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 grid grid-cols-6 gap-1.5 z-30 animate-scaleIn">
+          <div className="absolute bottom-full left-2 sm:left-3 mb-2 p-2.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-slate-200/80 dark:border-slate-700/80 grid grid-cols-6 gap-1.5 w-64 max-w-[calc(100vw-1rem)] z-30 animate-scaleIn">
             {QUICK_EMOJIS.map((em) => (
               <button
                 key={em}
                 type="button"
                 onClick={() => setInputText((prev) => prev + em)}
-                className="w-9 h-9 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center justify-center text-lg"
+                className="w-9 h-9 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center text-lg transition-transform active:scale-90"
               >
                 {em}
               </button>
@@ -1423,7 +1480,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
         {/* Language Dropdown Bar — Hidden by default; opens ONLY when user clicks Translate icon! */}
         {isTranslatorOpen && (
-          <div className="flex items-center justify-between gap-2 pb-1.5 text-[11px] overflow-x-auto no-scrollbar animate-fadeIn">
+          <div className="flex items-center justify-between gap-2 pb-2 text-[11px] overflow-x-auto no-scrollbar animate-fadeIn">
             <div className="flex items-center space-x-1.5 shrink-0">
               <Languages className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
               <select
@@ -1470,7 +1527,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         )}
 
         {isRecording ? (
-          <div className="flex items-center justify-between bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-2xl px-4 py-2.5">
+          <div className="flex items-center justify-between bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-3xl px-4 py-2.5">
             <div className="flex items-center space-x-2">
               <span className="w-3 h-3 bg-red-600 rounded-full animate-ping" />
               <span className="text-xs font-bold text-red-700 dark:text-red-300">
@@ -1501,7 +1558,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               e.preventDefault();
               handleSend();
             }}
-            className="flex items-end space-x-1 sm:space-x-1.5"
+            className="flex items-end gap-1.5"
           >
             <input
               type="file"
@@ -1514,77 +1571,85 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               }}
               className="hidden"
             />
-            <button
-              type="button"
-              onClick={() => {
-                suppressAlertUntilRef.current = Date.now() + 12000;
-                fileInputRef.current?.click();
-              }}
-              title="Attach File"
-              className="p-2 text-slate-500 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl shrink-0"
-            >
-              <Paperclip className="w-5 h-5" />
-            </button>
 
-            <button
-              type="button"
-              onClick={() => {
-                suppressAlertUntilRef.current = Date.now() + 12000;
-                setIsCameraOpen(true);
-              }}
-              title="Take Photo"
-              className="p-2 text-slate-500 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl shrink-0"
-            >
-              <Camera className="w-5 h-5" />
-            </button>
+            {/* Clean Unified Pill Container — Prevents Scrollbar & Border Overlap */}
+            <div className="flex-1 min-w-0 flex items-end gap-0.5 px-1.5 py-1 rounded-3xl bg-slate-100/90 dark:bg-slate-800/90 border border-slate-200/80 dark:border-slate-700/80 focus-within:bg-white dark:focus-within:bg-slate-900 focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/20 transition-all">
+              <button
+                type="button"
+                onClick={() => setEmojiOpen((prev) => !prev)}
+                title="Emoji"
+                className={`p-2 rounded-full shrink-0 transition-colors ${
+                  emojiOpen
+                    ? "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600"
+                    : "text-slate-500 dark:text-slate-400 hover:text-emerald-600"
+                }`}
+              >
+                <Smile className="w-5 h-5" />
+              </button>
 
-            <button
-              type="button"
-              onClick={handleToggleTranslator}
-              title={isTranslatorOpen ? "Turn Off Translator" : "Translate Message"}
-              className={`p-2 rounded-xl shrink-0 transition-colors ${
-                isTranslatorOpen
-                  ? "bg-emerald-600 text-white shadow-sm"
-                  : "text-slate-500 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800"
-              }`}
-            >
-              <Languages className="w-5 h-5" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setEmojiOpen((prev) => !prev)}
-              title="Emoji"
-              className="p-2 text-slate-500 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl shrink-0 hidden sm:inline-flex"
-            >
-              <Smile className="w-5 h-5" />
-            </button>
-
-            <textarea
-              ref={textareaRef}
-              rows={1}
-              value={inputText}
-              onChange={handleInputChange}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend();
+              <textarea
+                ref={textareaRef}
+                rows={1}
+                value={inputText}
+                onChange={handleInputChange}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                }}
+                placeholder={
+                  targetLang === "ORIGINAL"
+                    ? t.typeMessage
+                    : `Type (${TARGET_LANGUAGES.find((l) => l.code === targetLang)?.short || targetLang})...`
                 }
-              }}
-              placeholder={
-                targetLang === "ORIGINAL"
-                  ? t.typeMessage
-                  : `Type message (sends in ${TARGET_LANGUAGES.find((l) => l.code === targetLang)?.short || targetLang})...`
-              }
-              className="flex-1 min-w-0 py-2.5 px-3 text-sm rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 placeholder-slate-400 border border-transparent focus:bg-white dark:focus:bg-slate-950 focus:border-emerald-500 focus:outline-none resize-none max-h-28"
-            />
+                className="flex-1 min-w-0 py-2 px-1.5 text-sm bg-transparent border-0 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-0 resize-none max-h-24 overflow-y-auto no-scrollbar leading-snug"
+              />
+
+              <button
+                type="button"
+                onClick={() => {
+                  suppressAlertUntilRef.current = Date.now() + 12000;
+                  fileInputRef.current?.click();
+                }}
+                title="Attach File"
+                className="p-2 text-slate-500 dark:text-slate-400 hover:text-emerald-600 rounded-full shrink-0 transition-colors"
+              >
+                <Paperclip className="w-[18px] h-[18px]" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  suppressAlertUntilRef.current = Date.now() + 12000;
+                  setIsCameraOpen(true);
+                }}
+                title="Take Photo"
+                className="p-2 text-slate-500 dark:text-slate-400 hover:text-emerald-600 rounded-full shrink-0 transition-colors"
+              >
+                <Camera className="w-[18px] h-[18px]" />
+              </button>
+
+              <button
+                type="button"
+                onClick={handleToggleTranslator}
+                title={isTranslatorOpen ? "Turn Off Translator" : "Translate Message"}
+                className={`p-2 rounded-full shrink-0 transition-colors ${
+                  isTranslatorOpen
+                    ? "bg-emerald-600 text-white shadow-sm"
+                    : "text-slate-500 dark:text-slate-400 hover:text-emerald-600"
+                }`}
+              >
+                <Languages className="w-[18px] h-[18px]" />
+              </button>
+            </div>
 
             {!inputText.trim() && !selectedFile ? (
               <button
                 type="button"
                 onClick={startRecording}
                 title="Voice Note"
-                className="p-2.5 text-slate-500 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl shrink-0"
+                className="w-11 h-11 rounded-full bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 text-slate-600 dark:text-slate-300 hover:text-emerald-600 flex items-center justify-center shrink-0 border border-slate-200/80 dark:border-slate-700/80 transition-colors"
               >
                 <Mic className="w-5 h-5" />
               </button>
@@ -1592,7 +1657,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <button
                 type="submit"
                 disabled={uploading}
-                className="p-2.5 px-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl disabled:opacity-40 shrink-0 shadow-md flex items-center space-x-1"
+                className="w-11 h-11 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white disabled:opacity-40 shrink-0 shadow-md shadow-emerald-600/25 flex items-center justify-center transition-all active:scale-95"
               >
                 <Send className="w-4 h-4" />
               </button>
