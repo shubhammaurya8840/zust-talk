@@ -1,3 +1,12 @@
+export interface SocialLinks {
+  instagram?: string;
+  twitter?: string;
+  linkedin?: string;
+  youtube?: string;
+  github?: string;
+  website?: string;
+}
+
 export interface User {
   id: string;
   username: string;
@@ -6,6 +15,8 @@ export interface User {
   phone?: string | null;
   avatarUrl?: string | null;
   bio?: string | null;
+  primaryLanguage?: string;
+  socialLinks?: SocialLinks | null;
   lastSeenAt?: string | null;
   isOnline?: boolean;
   createdAt?: string;

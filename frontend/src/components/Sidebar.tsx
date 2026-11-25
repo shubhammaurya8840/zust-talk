@@ -18,6 +18,8 @@ import {
   Archive,
   Radar,
   Bell,
+  MoreVertical,
+  Lock,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -27,6 +29,7 @@ interface SidebarProps {
   onNewChat: () => void;
   onOpenProfile: () => void;
   onOpenInvite: () => void;
+  onOpenSecurity?: () => void;
   onOpenRadar?: () => void;
   isRadarActive?: boolean;
   pendingRadarRequests?: number;
@@ -34,7 +37,6 @@ interface SidebarProps {
   notificationPermission?: NotificationPermission | "unsupported";
   onRequestNotifications?: () => void;
   lang: Language;
-  onToggleLang: () => void;
   isDark?: boolean;
   onToggleTheme?: () => void;
 }
@@ -46,6 +48,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onNewChat,
   onOpenProfile,
   onOpenInvite,
+  onOpenSecurity,
   onOpenRadar,
   isRadarActive = false,
   pendingRadarRequests = 0,
@@ -53,7 +56,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   notificationPermission,
   onRequestNotifications,
   lang,
-  onToggleLang,
   isDark = false,
   onToggleTheme,
 }) => {
@@ -61,6 +63,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const { presenceMap, isConnected } = useSocket();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"ALL" | "DIRECT" | "GROUP" | "ARCHIVED">("ALL");
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const t = translations[lang];
 
@@ -109,11 +112,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <div className="relative h-full min-h-0 flex flex-col bg-white dark:bg-slate-900 border-r border-slate-200/80 dark:border-slate-800 w-full md:w-80 lg:w-96 shrink-0">
-      {/* Top Profile & Action Bar */}
-      <div className="shrink-0 px-3.5 py-3 bg-slate-50/80 dark:bg-slate-900 border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-2">
+      {/* Clean Minimal Top Header: Avatar (opens Settings), Night Mode, QR Scanner, New Chat, 3-Dot Menu */}
+      <div className="shrink-0 px-3.5 py-3 bg-slate-50/80 dark:bg-slate-900 border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-2 relative z-30">
         <div
           className="flex items-center space-x-2.5 cursor-pointer min-w-0 flex-1 group"
           onClick={onOpenProfile}
+          title="Open My Profile & Settings"
         >
           <UserAvatar
             name={user?.displayName}
@@ -124,7 +128,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             showOnlineDot
           />
           <div className="min-w-0 flex-1">
-            <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100 leading-tight truncate">
+            <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100 leading-tight truncate group-hover:text-emerald-600 transition-colors">
               {user?.displayName || user?.username}
             </h2>
             <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
@@ -133,26 +137,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center space-x-0.5 shrink-0">
+        <div className="flex items-center space-x-1 shrink-0 relative">
           {onToggleTheme && (
             <button
               type="button"
               onClick={onToggleTheme}
-              title={isDark ? "Light Mode" : "Dark Mode"}
+              title={isDark ? "Light Mode" : "Night Mode"}
               className="p-2 text-slate-500 dark:text-slate-400 hover:text-amber-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors"
             >
               {isDark ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4" />}
             </button>
           )}
-
-          <button
-            type="button"
-            onClick={onToggleLang}
-            title="Switch Language"
-            className="px-2 py-1.5 text-slate-600 dark:text-slate-300 hover:text-emerald-700 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors text-[11px] font-bold"
-          >
-            {lang === "en" ? "हिं" : "EN"}
-          </button>
 
           <button
             type="button"
@@ -167,44 +162,97 @@ export const Sidebar: React.FC<SidebarProps> = ({
             type="button"
             onClick={onNewChat}
             title={t.startNewChat}
-            className="p-2 text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors shadow-sm mx-0.5"
+            className="p-2 text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors shadow-sm"
           >
             <MessageSquarePlus className="w-4 h-4" />
           </button>
 
-          <button
-            type="button"
-            onClick={onOpenProfile}
-            title={t.profileSettings}
-            className="p-2 text-slate-500 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
+          {/* Three-Dot Overflow Menu: Settings, Security/Encryption, Notifications, Logout */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setMenuOpen((prev) => !prev)}
+              title="More options"
+              className="p-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors"
+            >
+              <MoreVertical className="w-4 h-4" />
+            </button>
 
-          <button
-            type="button"
-            onClick={logout}
-            title={t.logout}
-            className="p-2 text-slate-500 dark:text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-xl transition-colors"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
+            {menuOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
+                <div className="absolute right-0 top-10 w-52 bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 py-1.5 z-50 animate-scaleIn">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onOpenProfile();
+                    }}
+                    className="w-full px-4 py-2.5 text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center space-x-2.5"
+                  >
+                    <Settings className="w-4 h-4 text-emerald-600" />
+                    <span>Settings & Profile</span>
+                  </button>
+
+                  {onOpenSecurity && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        onOpenSecurity();
+                      }}
+                      className="w-full px-4 py-2.5 text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center space-x-2.5"
+                    >
+                      <Lock className="w-4 h-4 text-emerald-600" />
+                      <span>Encryption & Security</span>
+                    </button>
+                  )}
+
+                  {notificationPermission === "default" && onRequestNotifications && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        onRequestNotifications();
+                      }}
+                      className="w-full px-4 py-2.5 text-left text-xs font-medium text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 flex items-center space-x-2.5"
+                    >
+                      <Bell className="w-4 h-4 text-emerald-600" />
+                      <span>Enable Notifications</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      logout();
+                    }}
+                    className="w-full px-4 py-2.5 text-left text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 flex items-center space-x-2.5 border-t border-slate-100 dark:border-slate-800"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>{t.logout}</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Compact Chrome Notification Opt-In Strip when Permission is Default */}
+      {/* Compact Chrome Notification Opt-In Banner */}
       {notificationPermission === "default" && onRequestNotifications && (
         <div className="shrink-0 px-3 py-2 bg-emerald-50 dark:bg-emerald-950/40 border-b border-emerald-200/70 dark:border-emerald-900 flex items-center justify-between gap-2">
           <div className="flex items-center space-x-2 text-[11px] text-emerald-800 dark:text-emerald-200 font-medium min-w-0">
             <Bell className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-            <span className="truncate">Turn on Chrome notifications for messages & calls</span>
+            <span className="truncate">Enable notifications for messages, calls & radar</span>
           </div>
           <button
             type="button"
             onClick={onRequestNotifications}
             className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold shrink-0"
           >
-            Enable
+            Allow
           </button>
         </div>
       )}
@@ -263,7 +311,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Conversations List */}
-      <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/80 overscroll-contain pb-20">
+      <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/80 overscroll-contain pb-24">
         {filtered.length === 0 ? (
           <div className="p-8 text-center text-slate-400 flex flex-col items-center justify-center h-full">
             <Users className="w-10 h-10 text-slate-300 dark:text-slate-700 mb-2" />
@@ -366,16 +414,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
       </div>
 
-      {/* Floating Bottom-Right Circular Nearby Radar Button */}
+      {/* Floating Round Nearby Radar Button at Bottom-Right (Visible on Mobile & Desktop) */}
       {onOpenRadar && (
         <button
           type="button"
           onClick={onOpenRadar}
           title="Nearby Radar (100m)"
-          className={`absolute bottom-5 right-5 z-20 w-14 h-14 rounded-full flex items-center justify-center shadow-2xl transition-all hover:scale-105 active:scale-95 border-2 ${
+          aria-label="Open Nearby Radar"
+          className={`fixed md:absolute bottom-5 right-5 z-30 w-14 h-14 rounded-full flex items-center justify-center shadow-2xl transition-all hover:scale-105 active:scale-95 border-2 ${
             isRadarActive
               ? "bg-slate-900 dark:bg-emerald-500 text-white border-emerald-400 ring-4 ring-emerald-500/30"
-              : "bg-gradient-to-tr from-emerald-500 to-teal-600 text-white border-white/80 dark:border-slate-800 shadow-emerald-600/35"
+              : "bg-gradient-to-tr from-emerald-500 to-teal-600 text-white border-white/90 dark:border-slate-800 shadow-emerald-600/40"
           }`}
         >
           <Radar className="w-6 h-6" />

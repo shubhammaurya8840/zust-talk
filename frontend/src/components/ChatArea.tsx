@@ -98,9 +98,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [securityBanner, setSecurityBanner] = useState<string | null>(null);
 
-  // Any-to-Any Language Translation Mode
-  const [sourceLang, setSourceLang] = useState<string>(() => localStorage.getItem("zust_src_lang") || "auto");
-  const [targetLang, setTargetLang] = useState<string>(() => localStorage.getItem("zust_tgt_lang") || "ORIGINAL");
+  // Smart Translator: OFF by default! Opens only when user taps Translate icon; defaults target to peer's primaryLanguage
+  const [isTranslatorOpen, setIsTranslatorOpen] = useState(false);
+  const [sourceLang, setSourceLang] = useState<string>("auto");
+  const [targetLang, setTargetLang] = useState<string>("ORIGINAL");
   const [liveTranslation, setLiveTranslation] = useState<string>("");
   const [isTranslatingPreview, setIsTranslatingPreview] = useState(false);
   const [translatedBubbles, setTranslatedBubbles] = useState<Record<string, string>>({});
@@ -225,15 +226,31 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const handleChangeSourceLang = (code: string) => {
     setSourceLang(code);
-    localStorage.setItem("zust_src_lang", code);
     translationCacheRef.current = null;
   };
 
   const handleChangeTargetLang = (code: string) => {
     setTargetLang(code);
-    localStorage.setItem("zust_tgt_lang", code);
     translationCacheRef.current = null;
-    if (code === "ORIGINAL") setLiveTranslation("");
+    if (code === "ORIGINAL") {
+      setLiveTranslation("");
+      setIsTranslatorOpen(false);
+    }
+  };
+
+  const handleToggleTranslator = () => {
+    if (isTranslatorOpen) {
+      setIsTranslatorOpen(false);
+      setTargetLang("ORIGINAL");
+      setLiveTranslation("");
+      translationCacheRef.current = null;
+    } else {
+      const peerPrimary = otherMember?.primaryLanguage || user?.primaryLanguage || "en";
+      setSourceLang("auto");
+      setTargetLang(peerPrimary);
+      setIsTranslatorOpen(true);
+      translationCacheRef.current = null;
+    }
   };
 
   // Debounced live translation preview
@@ -1319,41 +1336,47 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         )}
 
-        {/* Any-Language-to-Any-Language Translation Controls */}
-        <div className="flex items-center justify-between gap-2 pb-1.5 text-[11px] overflow-x-auto no-scrollbar">
-          <div className="flex items-center space-x-1.5 shrink-0">
-            <Languages className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-            <select
-              value={sourceLang}
-              onChange={(e) => handleChangeSourceLang(e.target.value)}
-              aria-label="Source Language"
-              className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-lg px-2 py-0.5 text-[11px] font-semibold focus:outline-none border border-slate-200 dark:border-slate-700 max-w-[110px]"
+        {/* Language Dropdown Bar — Hidden by default; opens ONLY when user clicks Translate icon! */}
+        {isTranslatorOpen && (
+          <div className="flex items-center justify-between gap-2 pb-1.5 text-[11px] overflow-x-auto no-scrollbar animate-fadeIn">
+            <div className="flex items-center space-x-1.5 shrink-0">
+              <Languages className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              <select
+                value={sourceLang}
+                onChange={(e) => handleChangeSourceLang(e.target.value)}
+                aria-label="Source Language"
+                className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-lg px-2 py-1 text-[11px] font-semibold focus:outline-none border border-slate-200 dark:border-slate-700 max-w-[110px]"
+              >
+                {SOURCE_LANGUAGES.map((l) => (
+                  <option key={l.code} value={l.code}>
+                    {l.short}
+                  </option>
+                ))}
+              </select>
+              <span className="text-slate-400">→</span>
+              <select
+                value={targetLang}
+                onChange={(e) => handleChangeTargetLang(e.target.value)}
+                aria-label="Target Language"
+                className="bg-emerald-600 text-white rounded-lg px-2 py-1 text-[11px] font-bold focus:outline-none border border-emerald-600 max-w-[140px]"
+              >
+                {TARGET_LANGUAGES.map((l) => (
+                  <option key={l.code} value={l.code} className="text-slate-900 bg-white">
+                    {l.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button
+              type="button"
+              onClick={handleToggleTranslator}
+              className="text-[11px] text-slate-400 hover:text-slate-600 px-1.5 py-0.5 rounded shrink-0"
+              title="Turn off translator"
             >
-              {SOURCE_LANGUAGES.map((l) => (
-                <option key={l.code} value={l.code}>
-                  {l.short}
-                </option>
-              ))}
-            </select>
-            <span className="text-slate-400">→</span>
-            <select
-              value={targetLang}
-              onChange={(e) => handleChangeTargetLang(e.target.value)}
-              aria-label="Target Language"
-              className={`rounded-lg px-2 py-0.5 text-[11px] font-bold focus:outline-none border max-w-[130px] ${
-                targetLang === "ORIGINAL"
-                  ? "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700"
-                  : "bg-emerald-600 text-white border-emerald-600"
-              }`}
-            >
-              {TARGET_LANGUAGES.map((l) => (
-                <option key={l.code} value={l.code} className="text-slate-900 bg-white">
-                  {l.short}
-                </option>
-              ))}
-            </select>
+              Off
+            </button>
           </div>
-        </div>
+        )}
 
         {isRecording ? (
           <div className="flex items-center justify-between bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-2xl px-4 py-2.5">
@@ -1420,9 +1443,22 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
             <button
               type="button"
+              onClick={handleToggleTranslator}
+              title={isTranslatorOpen ? "Turn Off Translator" : "Translate Message"}
+              className={`p-2 rounded-xl shrink-0 transition-colors ${
+                isTranslatorOpen
+                  ? "bg-emerald-600 text-white shadow-sm"
+                  : "text-slate-500 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800"
+              }`}
+            >
+              <Languages className="w-5 h-5" />
+            </button>
+
+            <button
+              type="button"
               onClick={() => setEmojiOpen((prev) => !prev)}
               title="Emoji"
-              className="p-2 text-slate-500 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl shrink-0 hidden xs:inline-flex sm:inline-flex"
+              className="p-2 text-slate-500 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl shrink-0 hidden sm:inline-flex"
             >
               <Smile className="w-5 h-5" />
             </button>

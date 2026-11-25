@@ -1,4 +1,4 @@
-import { User, Conversation, Message, NearbyUser, ConnectionRequestItem } from "../types";
+import { User, Conversation, Message, NearbyUser, ConnectionRequestItem, SocialLinks } from "../types";
 
 const TOKEN_KEY = "india_chat_access_token";
 const REFRESH_KEY = "india_chat_refresh_token";
@@ -93,12 +93,49 @@ export const api = {
         body: JSON.stringify(credentials),
       }),
 
+    sendEmailOtp: (email: string, purpose: "REGISTER" | "RESET_PASSWORD") =>
+      request<{
+        success: boolean;
+        message: string;
+        deliveryMode: "smtp" | "ethereal" | "console";
+        devOtp?: string;
+        previewUrl?: string;
+      }>("/api/auth/email/send-otp", {
+        method: "POST",
+        body: JSON.stringify({ email, purpose }),
+      }),
+
+    verifyEmailOtp: (email: string, code: string, purpose: "REGISTER" | "RESET_PASSWORD") =>
+      request<{ success: boolean; verificationToken: string; email: string }>("/api/auth/email/verify-otp", {
+        method: "POST",
+        body: JSON.stringify({ email, code, purpose }),
+      }),
+
+    resetPasswordWithOtp: (payload: {
+      email: string;
+      newPassword: string;
+      code?: string;
+      verificationToken?: string;
+    }) =>
+      request<{ success: boolean; message: string }>("/api/auth/forgot-password/reset", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+
+    changePassword: (currentPassword: string, newPassword: string) =>
+      request<{ success: boolean; message: string }>("/api/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify({ currentPassword, newPassword }),
+      }),
+
     register: (data: {
       username: string;
       displayName: string;
       password: string;
+      email: string;
+      verificationToken: string;
+      primaryLanguage?: string;
       identifier?: string;
-      email?: string;
       phone?: string;
     }) =>
       request<{ success: boolean; user: User; accessToken: string; refreshToken: string }>("/api/auth/register", {
@@ -153,7 +190,14 @@ export const api = {
     getProfile: (userId: string) =>
       request<{ success: boolean; user: User }>(`/api/users/${userId}`),
 
-    updateMe: (data: { displayName?: string; username?: string; bio?: string | null; avatarUrl?: string | null }) =>
+    updateMe: (data: {
+      displayName?: string;
+      username?: string;
+      bio?: string | null;
+      avatarUrl?: string | null;
+      primaryLanguage?: string;
+      socialLinks?: SocialLinks | null;
+    }) =>
       request<{ success: boolean; user: User }>("/api/users/me", {
         method: "PATCH",
         body: JSON.stringify(data),

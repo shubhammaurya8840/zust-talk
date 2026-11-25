@@ -14,9 +14,16 @@ const envSchema = z.object({
   JWT_REFRESH_SECRET: z.string().min(32),
   ACCESS_TOKEN_TTL: z.string().default("15m"),
   REFRESH_TOKEN_DAYS: z.coerce.number().int().positive().default(30),
-  OTP_TTL_MINUTES: z.coerce.number().int().positive().default(5),
+  OTP_TTL_MINUTES: z.coerce.number().int().positive().default(10),
   DEV_RETURN_OTP: z.string().default("false"),
-  MAX_FILE_SIZE_MB: z.coerce.number().positive().default(25)
+  MAX_FILE_SIZE_MB: z.coerce.number().positive().default(25),
+  // Optional Free SMTP configuration (Gmail App Password, Brevo, Mailtrap, etc.)
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().int().positive().optional(),
+  SMTP_SECURE: z.string().optional(),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  SMTP_FROM: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

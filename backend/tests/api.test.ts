@@ -42,20 +42,54 @@ describe("India Chat Backend API Tests", () => {
     expect(data.status).toBe("healthy");
   });
 
-  it("1b. Auth - Register & Login with ID & Password", async () => {
+  it("1b. Auth - Email OTP Register, Login, Reset & Change Password + Profile Fields", async () => {
     const uniqueNum = Date.now().toString().slice(-6);
     const regUsername = `passuser_${uniqueNum}`;
+    const regEmail = `pass_${uniqueNum}@example.com`;
     const regPassword = "secretPassword123";
+    const resetPassword = "resetPassword456";
+    const finalPassword = "finalPassword789";
 
-    // 1. Register
+    // 1. Send Registration Email OTP
+    const sendOtpRes = await fetch(`${baseUrl}/api/auth/email/send-otp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: regEmail,
+        purpose: "REGISTER",
+      }),
+    });
+    expect(sendOtpRes.status).toBe(200);
+    const sendOtpData = await sendOtpRes.json();
+    expect(sendOtpData.success).toBe(true);
+    expect(sendOtpData.devOtp).toBeDefined();
+
+    // 2. Verify Registration Email OTP
+    const verifyOtpRes = await fetch(`${baseUrl}/api/auth/email/verify-otp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: regEmail,
+        code: sendOtpData.devOtp,
+        purpose: "REGISTER",
+      }),
+    });
+    expect(verifyOtpRes.status).toBe(200);
+    const verifyOtpData = await verifyOtpRes.json();
+    expect(verifyOtpData.success).toBe(true);
+    expect(verifyOtpData.verificationToken).toBeDefined();
+
+    // 3. Complete Registration with verificationToken & primaryLanguage
     const regRes = await fetch(`${baseUrl}/api/auth/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        email: regEmail,
+        verificationToken: verifyOtpData.verificationToken,
         username: regUsername,
         displayName: "Password User",
+        primaryLanguage: "hi",
         password: regPassword,
-        identifier: `pass_${uniqueNum}@example.com`,
       }),
     });
     expect(regRes.status).toBe(201);
@@ -63,13 +97,14 @@ describe("India Chat Backend API Tests", () => {
     expect(regData.success).toBe(true);
     expect(regData.accessToken).toBeDefined();
     expect(regData.user.username).toBe(regUsername);
+    expect(regData.user.primaryLanguage).toBe("hi");
 
-    // 2. Login with correct password
+    // 4. Login with correct password (using email or username)
     const loginRes = await fetch(`${baseUrl}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        identifier: regUsername,
+        identifier: regEmail,
         password: regPassword,
       }),
     });
@@ -78,7 +113,7 @@ describe("India Chat Backend API Tests", () => {
     expect(loginData.success).toBe(true);
     expect(loginData.accessToken).toBeDefined();
 
-    // 3. Login with wrong password
+    // 5. Login with wrong password
     const badLoginRes = await fetch(`${baseUrl}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -88,6 +123,77 @@ describe("India Chat Backend API Tests", () => {
       }),
     });
     expect(badLoginRes.status).toBe(401);
+
+    // 6. Forgot Password via Email OTP
+    const forgotOtpRes = await fetch(`${baseUrl}/api/auth/email/send-otp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: regEmail,
+        purpose: "RESET_PASSWORD",
+      }),
+    });
+    expect(forgotOtpRes.status).toBe(200);
+    const forgotOtpData = await forgotOtpRes.json();
+    expect(forgotOtpData.devOtp).toBeDefined();
+
+    const resetRes = await fetch(`${baseUrl}/api/auth/forgot-password/reset`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: regEmail,
+        code: forgotOtpData.devOtp,
+        newPassword: resetPassword,
+      }),
+    });
+    expect(resetRes.status).toBe(200);
+
+    // 7. Login with reset password
+    const loginResetRes = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identifier: regEmail,
+        password: resetPassword,
+      }),
+    });
+    expect(loginResetRes.status).toBe(200);
+    const loginResetData = await loginResetRes.json();
+    const userToken = loginResetData.accessToken;
+
+    // 8. Change Password in Settings
+    const changePwRes = await fetch(`${baseUrl}/api/auth/change-password`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${userToken}`,
+      },
+      body: JSON.stringify({
+        currentPassword: resetPassword,
+        newPassword: finalPassword,
+      }),
+    });
+    expect(changePwRes.status).toBe(200);
+
+    // 9. Update primaryLanguage & socialLinks via PATCH /api/users/me
+    const patchProfileRes = await fetch(`${baseUrl}/api/users/me`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${userToken}`,
+      },
+      body: JSON.stringify({
+        primaryLanguage: "mr",
+        socialLinks: {
+          instagram: "https://instagram.com/zust_test",
+          github: "github.com/zust_test",
+        },
+      }),
+    });
+    expect(patchProfileRes.status).toBe(200);
+    const patchProfileData = await patchProfileRes.json();
+    expect(patchProfileData.user.primaryLanguage).toBe("mr");
+    expect(patchProfileData.user.socialLinks.instagram).toBe("https://instagram.com/zust_test");
   });
 
   it("2. Auth - Request OTP for User 1", async () => {

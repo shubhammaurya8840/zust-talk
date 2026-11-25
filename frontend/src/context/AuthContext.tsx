@@ -10,6 +10,9 @@ interface AuthContextType {
     username: string;
     displayName: string;
     password: string;
+    email: string;
+    verificationToken: string;
+    primaryLanguage?: string;
     identifier?: string;
   }) => Promise<void>;
   loginAsGuest: () => Promise<void>;
@@ -64,6 +67,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     username: string;
     displayName: string;
     password: string;
+    email: string;
+    verificationToken: string;
+    primaryLanguage?: string;
     identifier?: string;
   }) => {
     const res = await api.auth.register(data);

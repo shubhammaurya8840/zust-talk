@@ -3,6 +3,20 @@ import { prisma } from "../../config/prisma";
 import { HttpError } from "../../utils/http-error";
 import { io, isUserOnline } from "../../sockets/socket";
 
+const userSelect = {
+  id: true,
+  username: true,
+  displayName: true,
+  avatarUrl: true,
+  bio: true,
+  primaryLanguage: true,
+  socialLinks: true,
+  phone: true,
+  email: true,
+  lastSeenAt: true,
+  createdAt: true,
+};
+
 export async function search(req: Request, res: Response) {
   const q = String(req.query.q || "").trim();
   if (q.length < 2) throw new HttpError(400, "Search query must contain at least 2 characters");
@@ -25,17 +39,7 @@ export async function search(req: Request, res: Response) {
       id: { not: req.auth!.userId },
       OR: searchConditions,
     },
-    select: {
-      id: true,
-      username: true,
-      displayName: true,
-      avatarUrl: true,
-      bio: true,
-      phone: true,
-      email: true,
-      lastSeenAt: true,
-      createdAt: true,
-    },
+    select: userSelect,
     take: 20,
   });
 
@@ -50,18 +54,7 @@ export async function lookupByUsername(req: Request, res: Response) {
   if (!raw) throw new HttpError(400, "Username is required");
   const user = await prisma.user.findUnique({
     where: { username: raw },
-    select: {
-      id: true,
-      username: true,
-      displayName: true,
-      avatarUrl: true,
-      bio: true,
-      phone: true,
-      email: true,
-      lastSeenAt: true,
-      createdAt: true,
-      isActive: true,
-    },
+    select: { ...userSelect, isActive: true },
   });
   if (!user || !user.isActive) throw new HttpError(404, "User not found");
   const { isActive: _isActive, ...safeUser } = user;
@@ -75,18 +68,7 @@ export async function getProfile(req: Request, res: Response) {
   const userId = String(req.params.userId || "").trim();
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: {
-      id: true,
-      username: true,
-      displayName: true,
-      avatarUrl: true,
-      bio: true,
-      phone: true,
-      email: true,
-      lastSeenAt: true,
-      createdAt: true,
-      isActive: true,
-    },
+    select: { ...userSelect, isActive: true },
   });
   if (!user || !user.isActive) throw new HttpError(404, "User not found");
   const { isActive: _isActive, ...safeUser } = user;
@@ -100,17 +82,7 @@ export async function updateMe(req: Request, res: Response) {
   const user = await prisma.user.update({
     where: { id: req.auth!.userId },
     data: req.body,
-    select: {
-      id: true,
-      username: true,
-      displayName: true,
-      bio: true,
-      avatarUrl: true,
-      phone: true,
-      email: true,
-      lastSeenAt: true,
-      createdAt: true,
-    },
+    select: userSelect,
   });
   if (io) {
     io.emit("user:updated", user);

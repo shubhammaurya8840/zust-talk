@@ -22,6 +22,7 @@ import { InviteModal } from "./components/InviteModal";
 import { CallModal, ActiveCallState } from "./components/CallModal";
 import { GroupCallModal, ActiveGroupCallState } from "./components/GroupCallModal";
 import { NearbyRadarPage } from "./components/NearbyRadarPage";
+import { E2EEModal } from "./components/E2EEModal";
 import { MessageSquare, Plus, QrCode, Radar } from "lucide-react";
 
 const CONV_CACHE_KEY = "zust_cached_conversations";
@@ -47,6 +48,7 @@ export const AppContent: React.FC = () => {
   const [viewingUser, setViewingUser] = useState<User | null>(null);
   const [isGroupInfoOpen, setIsGroupInfoOpen] = useState(false);
   const [isInviteOpen, setIsInviteOpen] = useState(false);
+  const [isAccountSecurityOpen, setIsAccountSecurityOpen] = useState(false);
   const [isRadarOpen, setIsRadarOpen] = useState(false);
   const [radarInitialTab, setRadarInitialTab] = useState<"NEARBY" | "REQUESTS">("NEARBY");
   const [pendingRadarRequests, setPendingRadarRequests] = useState(0);
@@ -87,6 +89,7 @@ export const AppContent: React.FC = () => {
   useBackLayer("new-chat-modal", 60, isNewChatOpen, () => setIsNewChatOpen(false));
   useBackLayer("profile-modal", 60, isProfileOpen, () => setIsProfileOpen(false));
   useBackLayer("invite-modal", 60, isInviteOpen, () => setIsInviteOpen(false));
+  useBackLayer("account-security-modal", 60, isAccountSecurityOpen, () => setIsAccountSecurityOpen(false));
   useBackLayer("group-info-drawer", 50, isGroupInfoOpen, () => setIsGroupInfoOpen(false));
   useBackLayer("nearby-radar", 45, isRadarOpen, () => setIsRadarOpen(false));
   useBackLayer("active-conversation", 40, Boolean(activeConversationId), () => {
@@ -440,6 +443,7 @@ export const AppContent: React.FC = () => {
           onNewChat={() => setIsNewChatOpen(true)}
           onOpenProfile={() => setIsProfileOpen(true)}
           onOpenInvite={() => setIsInviteOpen(true)}
+          onOpenSecurity={() => setIsAccountSecurityOpen(true)}
           onOpenRadar={() => {
             setRadarInitialTab("NEARBY");
             setIsRadarOpen(true);
@@ -451,7 +455,6 @@ export const AppContent: React.FC = () => {
           notificationPermission={notifPermission}
           onRequestNotifications={handleRequestNotifications}
           lang={lang}
-          onToggleLang={toggleLanguage}
           isDark={isDark}
           onToggleTheme={toggleTheme}
         />
@@ -579,6 +582,12 @@ export const AppContent: React.FC = () => {
           loadConversations();
           setActiveConversationId(id);
         }}
+      />
+
+      <E2EEModal
+        isOpen={isAccountSecurityOpen}
+        onClose={() => setIsAccountSecurityOpen(false)}
+        peerName={user.displayName || user.username}
       />
 
       {activeCall && user && (

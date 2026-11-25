@@ -10,6 +10,8 @@ const userPublicSelect = {
   displayName: true,
   avatarUrl: true,
   bio: true,
+  primaryLanguage: true,
+  socialLinks: true,
   phone: true,
   email: true,
   lastSeenAt: true,

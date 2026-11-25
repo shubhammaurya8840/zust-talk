@@ -50,6 +50,8 @@ model User {
   passwordHash           String?
   avatarUrl              String?
   bio                    String?
+  primaryLanguage        String   @default("en")
+  socialLinks            Json?
   lastSeenAt             DateTime?
   nearbyDiscoveryEnabled Boolean  @default(false)
   nearbyInvisibleMode    Boolean  @default(false)
