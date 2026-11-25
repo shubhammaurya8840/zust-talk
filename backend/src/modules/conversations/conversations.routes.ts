@@ -11,6 +11,7 @@ router.get("/", asyncHandler(controller.list));
 router.get("/:conversationId", asyncHandler(controller.getById));
 router.patch("/:conversationId", validateBody(z.object({ title: z.string().min(1).max(80) })), asyncHandler(controller.updateGroup));
 router.post("/:conversationId/archive", validateBody(z.object({ archived: z.boolean().default(true) })), asyncHandler(controller.toggleArchive));
+router.post("/:conversationId/security-alert", validateBody(z.object({ kind: z.enum(["screenshot", "screen_record"]).default("screenshot") })), asyncHandler(controller.sendSecurityAlert));
 router.post("/direct", validateBody(z.object({ userId: z.string().uuid() })), asyncHandler(controller.createDirect));
 router.post("/group", validateBody(z.object({ title: z.string().min(1).max(80), memberIds: z.array(z.string().uuid()).min(1).max(100) })), asyncHandler(controller.createGroup));
 router.get("/:conversationId/members", asyncHandler(controller.members));

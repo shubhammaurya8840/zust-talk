@@ -213,6 +213,7 @@ export async function register(req: Request, res: Response) {
       bio: user.bio,
       primaryLanguage: user.primaryLanguage,
       socialLinks: user.socialLinks,
+      isVerified: user.isVerified,
     },
     ...tokens,
   });
@@ -272,6 +273,7 @@ export async function login(req: Request, res: Response) {
       bio: user.bio,
       primaryLanguage: user.primaryLanguage,
       socialLinks: user.socialLinks,
+      isVerified: user.isVerified,
     },
     ...tokens,
   });
@@ -338,50 +340,6 @@ export async function changePassword(req: Request, res: Response) {
   });
 
   res.json({ success: true, message: "Password updated successfully" });
-}
-
-export async function guestLogin(_req: Request, res: Response) {
-  const randomSuffix = crypto.randomBytes(3).toString("hex");
-  const username = `guest_${randomSuffix}`;
-  const displayName = `Guest ${randomSuffix.toUpperCase()}`;
-  const dummyPassword = crypto.randomBytes(16).toString("hex");
-  const passwordHash = await bcrypt.hash(dummyPassword, 8);
-
-  const user = await prisma.user.create({
-    data: {
-      username,
-      displayName,
-      passwordHash,
-      isVerified: false,
-      isActive: true,
-    },
-  });
-
-  const session = await prisma.session.create({
-    data: {
-      userId: user.id,
-      refreshTokenHash: "pending",
-      expiresAt: new Date(Date.now() + env.REFRESH_TOKEN_DAYS * 86400_000),
-    },
-  });
-  const tokens = makeTokens(user.id, session.id);
-  await prisma.session.update({
-    where: { id: session.id },
-    data: { refreshTokenHash: hash(tokens.refreshToken) },
-  });
-
-  res.status(201).json({
-    success: true,
-    user: {
-      id: user.id,
-      username: user.username,
-      displayName: user.displayName,
-      avatarUrl: user.avatarUrl,
-      primaryLanguage: user.primaryLanguage,
-      socialLinks: user.socialLinks,
-    },
-    ...tokens,
-  });
 }
 
 export async function requestOtp(req: Request, res: Response) {
@@ -533,6 +491,7 @@ export async function me(req: Request, res: Response) {
       bio: true,
       primaryLanguage: true,
       socialLinks: true,
+      isVerified: true,
       createdAt: true,
     },
   });

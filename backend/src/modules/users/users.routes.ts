@@ -38,6 +38,16 @@ router.patch(
   ),
   asyncHandler(controller.updateMe)
 );
+router.post(
+  "/me/email/send-otp",
+  validateBody(z.object({ email: z.string().email("Please enter a valid Gmail or email address") })),
+  asyncHandler(controller.sendEmailVerificationOtp)
+);
+router.post(
+  "/me/email/verify",
+  validateBody(z.object({ email: z.string().email(), code: z.string().length(6, "OTP must be 6 digits") })),
+  asyncHandler(controller.verifyAndUpdateEmail)
+);
 router.post("/:userId/block", asyncHandler(controller.block));
 router.delete("/:userId/block", asyncHandler(controller.unblock));
 router.post(

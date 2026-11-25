@@ -215,7 +215,7 @@ async function getDevTransporter(): Promise<{ transporter: MailTransporter; mode
 export async function sendOtpEmail(params: {
   to: string;
   code: string;
-  purpose: "REGISTER" | "RESET_PASSWORD";
+  purpose: "REGISTER" | "RESET_PASSWORD" | "VERIFY_EMAIL";
 }): Promise<EmailDeliveryResult> {
   const { to, code, purpose } = params;
   const isReset = purpose === "RESET_PASSWORD";

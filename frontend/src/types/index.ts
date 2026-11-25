@@ -17,6 +17,7 @@ export interface User {
   bio?: string | null;
   primaryLanguage?: string;
   socialLinks?: SocialLinks | null;
+  isVerified?: boolean;
   lastSeenAt?: string | null;
   isOnline?: boolean;
   createdAt?: string;

@@ -15,7 +15,6 @@ interface AuthContextType {
     primaryLanguage?: string;
     identifier?: string;
   }) => Promise<void>;
-  loginAsGuest: () => Promise<void>;
   login: (payload: { destination: string; code: string; username?: string; displayName?: string }) => Promise<void>;
   logout: () => Promise<void>;
   updateUser: (user: User) => void;
@@ -79,14 +78,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const loginAsGuest = async () => {
-    const res = await api.auth.guest();
-    if (res.success && res.user) {
-      setTokens(res.accessToken, res.refreshToken);
-      setUser(res.user);
-    }
-  };
-
   const login = async (payload: { destination: string; code: string; username?: string; displayName?: string }) => {
     const res = await api.auth.verifyOtp(payload);
     if (res.success && res.user) {
@@ -117,7 +108,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         loading,
         loginWithPassword,
         registerWithPassword,
-        loginAsGuest,
         login,
         logout,
         updateUser,

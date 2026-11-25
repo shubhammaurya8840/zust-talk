@@ -194,6 +194,40 @@ describe("India Chat Backend API Tests", () => {
     const patchProfileData = await patchProfileRes.json();
     expect(patchProfileData.user.primaryLanguage).toBe("mr");
     expect(patchProfileData.user.socialLinks.instagram).toBe("https://instagram.com/zust_test");
+
+    // 10. Settings: Verify / Change Gmail via OTP
+    const newEmail = `changed_${uniqueNum}@example.com`;
+    const sendChangeOtpRes = await fetch(`${baseUrl}/api/users/me/email/send-otp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${userToken}`,
+      },
+      body: JSON.stringify({ email: newEmail }),
+    });
+    expect(sendChangeOtpRes.status).toBe(200);
+    const sendChangeOtpData = await sendChangeOtpRes.json();
+    expect(sendChangeOtpData.devOtp).toBeDefined();
+
+    const verifyChangeEmailRes = await fetch(`${baseUrl}/api/users/me/email/verify`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${userToken}`,
+      },
+      body: JSON.stringify({
+        email: newEmail,
+        code: sendChangeOtpData.devOtp,
+      }),
+    });
+    expect(verifyChangeEmailRes.status).toBe(200);
+    const verifyChangeEmailData = await verifyChangeEmailRes.json();
+    expect(verifyChangeEmailData.user.email).toBe(newEmail);
+    expect(verifyChangeEmailData.user.isVerified).toBe(true);
+
+    // 11. Guest login endpoint must no longer exist
+    const guestRes = await fetch(`${baseUrl}/api/auth/guest`, { method: "POST" });
+    expect(guestRes.status).toBe(404);
   });
 
   it("2. Auth - Request OTP for User 1", async () => {
@@ -591,6 +625,20 @@ describe("India Chat Backend API Tests", () => {
       headers: { Authorization: `Bearer ${user2Token}` }
     });
     expect(secondOpen.status).toBe(410);
+
+    // Screenshot / Screen-Record Security Alert REST endpoint
+    const ssAlertRes = await fetch(`${baseUrl}/api/conversations/${directConvId}/security-alert`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${user1Token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ kind: "screenshot" }),
+    });
+    expect(ssAlertRes.status).toBe(201);
+    const ssAlertData = await ssAlertRes.json();
+    expect(ssAlertData.message.type).toBe("SYSTEM");
+    expect(ssAlertData.message.body).toContain("screenshot");
   });
 
   it("13. Nearby Radar - Consent, 100m Radius, Privacy, Invisible Mode & Connection Requests", async () => {

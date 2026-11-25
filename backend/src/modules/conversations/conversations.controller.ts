@@ -2,7 +2,7 @@ import { Request, Response } from "express";
 import { ConversationType, MemberRole } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { HttpError } from "../../utils/http-error";
-import { isUserOnline } from "../../sockets/socket";
+import { isUserOnline, io } from "../../sockets/socket";
 
 const userPublicSelect = {
   id: true,
@@ -172,4 +172,75 @@ export async function removeMember(req: Request, res: Response) {
     where: { conversationId_userId: { conversationId, userId: targetUserId } }
   });
   res.json({ success: true, message: "Member removed" });
+}
+
+export async function sendSecurityAlert(req: Request, res: Response) {
+  const conversationId = req.params.conversationId as string;
+  const userId = req.auth!.userId;
+  const kind = req.body.kind === "screen_record" ? "screen_record" : "screenshot";
+
+  await assertMember(conversationId, userId);
+
+  const actor = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { displayName: true, username: true },
+  });
+  const actorName = actor?.displayName || actor?.username || "Someone";
+  const alertBody =
+    kind === "screen_record"
+      ? `🚨 ${actorName} started screen recording this chat`
+      : `📸 ${actorName} took a screenshot of this chat`;
+
+  // Prevent duplicate alerts if Socket.IO & REST fire together within 2s
+  const recentDuplicate = await prisma.message.findFirst({
+    where: {
+      conversationId,
+      senderId: userId,
+      type: "SYSTEM",
+      body: alertBody,
+      createdAt: { gt: new Date(Date.now() - 2000) },
+    },
+    include: {
+      sender: { select: { id: true, username: true, displayName: true, avatarUrl: true } },
+      receipts: true,
+      attachments: true,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  if (recentDuplicate) {
+    return res.status(200).json({ success: true, message: recentDuplicate, deduplicated: true });
+  }
+
+  const systemMsg = await prisma.message.create({
+    data: {
+      conversationId,
+      senderId: userId,
+      body: alertBody,
+      type: "SYSTEM",
+    },
+    include: {
+      sender: { select: { id: true, username: true, displayName: true, avatarUrl: true } },
+      receipts: true,
+      attachments: true,
+    },
+  });
+
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: { updatedAt: new Date() },
+  });
+
+  if (io) {
+    const convMembers = await prisma.conversationMember.findMany({
+      where: { conversationId },
+      select: { userId: true },
+    });
+    for (const m of convMembers) {
+      io.to(`user:${m.userId}`).emit("message:new", systemMsg);
+    }
+    io.to(`conversation:${conversationId}`).emit("message:new", systemMsg);
+  }
+
+  res.status(201).json({ success: true, message: systemMsg });
 }

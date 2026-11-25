@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import { SocialLinks } from "../types";
 import { AVATAR_PRESETS, UserAvatar } from "../utils/avatars";
 import { TARGET_LANGUAGES } from "../utils/translate";
-import { X, User, Check, Edit2, RotateCcw, Lock, Languages, Link2 } from "lucide-react";
+import { X, User, Check, Edit2, RotateCcw, Lock, Languages, Link2, Mail, ShieldCheck, AlertCircle } from "lucide-react";
 
 interface ProfileModalProps {
   isOpen: boolean;
@@ -21,6 +21,14 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
   const [avatarUrl, setAvatarUrl] = useState<string | null>(user?.avatarUrl || null);
   const [primaryLanguage, setPrimaryLanguage] = useState(user?.primaryLanguage || "en");
   const [socialLinks, setSocialLinks] = useState<SocialLinks>(user?.socialLinks || {});
+
+  // Gmail Verification & Change via OTP state
+  const [isEditingEmail, setIsEditingEmail] = useState(false);
+  const [emailInput, setEmailInput] = useState(user?.email || "");
+  const [emailOtpSent, setEmailOtpSent] = useState(false);
+  const [emailOtpCode, setEmailOtpCode] = useState("");
+  const [emailDevOtpHint, setEmailDevOtpHint] = useState<string | null>(null);
+  const [emailLoading, setEmailLoading] = useState(false);
 
   // Change password fields
   const [currentPassword, setCurrentPassword] = useState("");
@@ -39,6 +47,11 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
       setAvatarUrl(user.avatarUrl || null);
       setPrimaryLanguage(user.primaryLanguage || "en");
       setSocialLinks(user.socialLinks || {});
+      setIsEditingEmail(false);
+      setEmailInput(user.email || "");
+      setEmailOtpSent(false);
+      setEmailOtpCode("");
+      setEmailDevOtpHint(null);
       setCurrentPassword("");
       setNewPassword("");
       setConfirmNewPassword("");
@@ -48,6 +61,51 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
   }, [isOpen, user]);
 
   if (!isOpen || !user) return null;
+
+  const handleSendEmailOtp = async () => {
+    setError(null);
+    setSuccess(null);
+    const cleanEmail = emailInput.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes("@")) {
+      return setError("Please enter a valid Gmail or email address.");
+    }
+    try {
+      setEmailLoading(true);
+      const res = await api.users.sendEmailVerificationOtp(cleanEmail);
+      setEmailOtpSent(true);
+      setEmailDevOtpHint(res.devOtp ? `Test OTP: ${res.devOtp}` : null);
+      setSuccess(res.message);
+    } catch (err: any) {
+      setError(err.message || "Failed to send verification OTP.");
+    } finally {
+      setEmailLoading(false);
+    }
+  };
+
+  const handleVerifyEmailOtp = async () => {
+    setError(null);
+    setSuccess(null);
+    const cleanEmail = emailInput.trim().toLowerCase();
+    if (emailOtpCode.trim().length !== 6) {
+      return setError("Please enter the 6-digit OTP code.");
+    }
+    try {
+      setEmailLoading(true);
+      const res = await api.users.verifyAndUpdateEmail(cleanEmail, emailOtpCode.trim());
+      if (res.success && res.user) {
+        updateUser(res.user);
+        setSuccess(res.message || "Gmail verified & saved!");
+        setIsEditingEmail(false);
+        setEmailOtpSent(false);
+        setEmailOtpCode("");
+        setEmailDevOtpHint(null);
+      }
+    } catch (err: any) {
+      setError(err.message || "Invalid or expired OTP code.");
+    } finally {
+      setEmailLoading(false);
+    }
+  };
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -183,9 +241,136 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
                   size="xl"
                   className="mx-auto ring-4 ring-emerald-500/20 rounded-3xl"
                 />
-                <p className="text-xs text-slate-400 mt-2">
-                  @{user.username} {user.email ? `• ${user.email}` : ""}
-                </p>
+                <p className="text-xs text-slate-400 mt-2">@{user.username}</p>
+              </div>
+
+              {/* Gmail Verify / Change via OTP Box */}
+              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center space-x-1.5">
+                      <Mail className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span className="text-xs font-bold text-slate-700 dark:text-slate-200">Gmail / Email</span>
+                      {user.email && user.isVerified ? (
+                        <span className="inline-flex items-center space-x-0.5 px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold">
+                          <ShieldCheck className="w-3 h-3" />
+                          <span>Verified</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center space-x-0.5 px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 text-[10px] font-bold">
+                          <AlertCircle className="w-3 h-3" />
+                          <span>{user.email ? "Not Verified" : "No Gmail"}</span>
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                      {user.email || "Add your Gmail to verify & recover your account"}
+                    </p>
+                  </div>
+
+                  {!isEditingEmail && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEmailInput(user.email || "");
+                        setEmailOtpSent(false);
+                        setEmailOtpCode("");
+                        setEmailDevOtpHint(null);
+                        setIsEditingEmail(true);
+                      }}
+                      className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold shrink-0 transition-colors"
+                    >
+                      {!user.email ? "Add & Verify" : !user.isVerified ? "Verify / Change" : "Change Gmail"}
+                    </button>
+                  )}
+                </div>
+
+                {isEditingEmail && (
+                  <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-700">
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="email"
+                        value={emailInput}
+                        disabled={emailOtpSent}
+                        onChange={(e) => setEmailInput(e.target.value)}
+                        placeholder="yourname@gmail.com"
+                        className="flex-1 min-w-0 px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-70"
+                      />
+                      {!emailOtpSent ? (
+                        <button
+                          type="button"
+                          onClick={handleSendEmailOtp}
+                          disabled={emailLoading}
+                          className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shrink-0 disabled:opacity-50"
+                        >
+                          {emailLoading ? "Sending..." : "Send OTP"}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEmailOtpSent(false);
+                            setEmailOtpCode("");
+                            setEmailDevOtpHint(null);
+                          }}
+                          className="px-2.5 py-2 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold shrink-0"
+                        >
+                          Edit
+                        </button>
+                      )}
+                    </div>
+
+                    {emailOtpSent && (
+                      <div className="space-y-2">
+                        {emailDevOtpHint && (
+                          <div className="px-2.5 py-1.5 bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 rounded-lg text-[11px] text-amber-800 dark:text-amber-300 flex items-center justify-between">
+                            <span>{emailDevOtpHint}</span>
+                            <button
+                              type="button"
+                              onClick={() => setEmailOtpCode(emailDevOtpHint.replace(/\D/g, ""))}
+                              className="underline font-bold"
+                            >
+                              Auto-fill
+                            </button>
+                          </div>
+                        )}
+                        <div className="flex items-center space-x-2">
+                          <input
+                            type="text"
+                            maxLength={6}
+                            value={emailOtpCode}
+                            onChange={(e) => setEmailOtpCode(e.target.value.replace(/\D/g, ""))}
+                            placeholder="6-digit OTP"
+                            className="flex-1 min-w-0 px-3 py-2 text-center tracking-widest font-bold text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleVerifyEmailOtp}
+                            disabled={emailLoading || emailOtpCode.length !== 6}
+                            className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shrink-0 disabled:opacity-50"
+                          >
+                            {emailLoading ? "Verifying..." : "Verify"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsEditingEmail(false);
+                          setEmailOtpSent(false);
+                          setEmailOtpCode("");
+                          setEmailDevOtpHint(null);
+                        }}
+                        className="text-[11px] text-slate-400 hover:text-slate-600"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Avatar Picker */}

@@ -1,7 +1,12 @@
 import { Request, Response } from "express";
+import crypto from "node:crypto";
+import { env } from "../../config/env";
 import { prisma } from "../../config/prisma";
 import { HttpError } from "../../utils/http-error";
 import { io, isUserOnline } from "../../sockets/socket";
+import { sendOtpEmail } from "../../utils/mailer";
+
+const hashOtp = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
 
 const userSelect = {
   id: true,
@@ -13,6 +18,7 @@ const userSelect = {
   socialLinks: true,
   phone: true,
   email: true,
+  isVerified: true,
   lastSeenAt: true,
   createdAt: true,
 };
@@ -88,6 +94,106 @@ export async function updateMe(req: Request, res: Response) {
     io.emit("user:updated", user);
   }
   res.json({ success: true, user: { ...user, isOnline: isUserOnline(user.id) } });
+}
+
+export async function sendEmailVerificationOtp(req: Request, res: Response) {
+  const userId = req.auth!.userId;
+  const cleanEmail = String(req.body.email).trim().toLowerCase();
+
+  const conflict = await prisma.user.findFirst({
+    where: {
+      email: cleanEmail,
+      id: { not: userId },
+    },
+    select: { id: true },
+  });
+  if (conflict) {
+    throw new HttpError(409, "This email is already linked to another account.");
+  }
+
+  const code = String(crypto.randomInt(100000, 1000000));
+  const destination = `USER_EMAIL:${userId}:${cleanEmail}`;
+
+  await prisma.otpChallenge.create({
+    data: {
+      destination,
+      codeHash: hashOtp(code),
+      expiresAt: new Date(Date.now() + env.OTP_TTL_MINUTES * 60_000),
+    },
+  });
+
+  const delivery = await sendOtpEmail({ to: cleanEmail, code, purpose: "VERIFY_EMAIL" });
+  const isRealDelivery =
+    delivery.mode === "webhook" ||
+    delivery.mode === "brevo" ||
+    delivery.mode === "resend" ||
+    delivery.mode === "smtp";
+
+  if (delivery.mode === "failed" && env.DEV_RETURN_OTP !== "true") {
+    throw new HttpError(502, delivery.error || "Unable to send verification OTP right now.");
+  }
+
+  const response: Record<string, unknown> = {
+    success: true,
+    message: isRealDelivery
+      ? `Verification OTP sent to ${cleanEmail}. Check your inbox or spam.`
+      : delivery.mode === "failed"
+        ? `${delivery.error || "Email server unavailable."} Use Test OTP below.`
+        : `Verification OTP generated for ${cleanEmail}.`,
+    deliveryMode: delivery.mode,
+  };
+
+  if (!isRealDelivery) {
+    response.devOtp = code;
+    if (delivery.previewUrl) response.previewUrl = delivery.previewUrl;
+  }
+
+  res.status(200).json(response);
+}
+
+export async function verifyAndUpdateEmail(req: Request, res: Response) {
+  const userId = req.auth!.userId;
+  const cleanEmail = String(req.body.email).trim().toLowerCase();
+  const code = String(req.body.code).trim();
+  const destination = `USER_EMAIL:${userId}:${cleanEmail}`;
+
+  const challenge = await prisma.otpChallenge.findFirst({
+    where: { destination, consumedAt: null, expiresAt: { gt: new Date() } },
+    orderBy: { createdAt: "desc" },
+  });
+
+  if (!challenge || challenge.codeHash !== hashOtp(code)) {
+    throw new HttpError(400, "Invalid or expired verification OTP");
+  }
+
+  const conflict = await prisma.user.findFirst({
+    where: { email: cleanEmail, id: { not: userId } },
+    select: { id: true },
+  });
+  if (conflict) {
+    throw new HttpError(409, "This email is already linked to another account.");
+  }
+
+  await prisma.otpChallenge.update({
+    where: { id: challenge.id },
+    data: { consumedAt: new Date() },
+  });
+
+  const updated = await prisma.user.update({
+    where: { id: userId },
+    data: { email: cleanEmail, isVerified: true },
+    select: userSelect,
+  });
+
+  if (io) {
+    io.emit("user:updated", updated);
+  }
+
+  res.json({
+    success: true,
+    message: "Gmail verified & saved successfully!",
+    user: { ...updated, isOnline: isUserOnline(updated.id) },
+  });
 }
 
 export async function block(req: Request, res: Response) {

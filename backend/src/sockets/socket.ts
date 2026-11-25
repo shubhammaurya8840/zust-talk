@@ -152,6 +152,17 @@ export function initializeSocket(server: HttpServer) {
             ? `🚨 ${actorName} started screen recording this chat`
             : `📸 ${actorName} took a screenshot of this chat`;
 
+        const recentDuplicate = await prisma.message.findFirst({
+          where: {
+            conversationId: data.conversationId,
+            senderId: userId,
+            type: "SYSTEM",
+            body: alertBody,
+            createdAt: { gt: new Date(Date.now() - 2000) }
+          }
+        });
+        if (recentDuplicate) return;
+
         const systemMsg = await prisma.message.create({
           data: {
             conversationId: data.conversationId,
@@ -165,6 +176,11 @@ export function initializeSocket(server: HttpServer) {
             attachments: true
           }
         });
+
+        await prisma.conversation.update({
+          where: { id: data.conversationId },
+          data: { updatedAt: new Date() }
+        }).catch(() => {});
 
         const convMembers = await prisma.conversationMember.findMany({
           where: { conversationId: data.conversationId },

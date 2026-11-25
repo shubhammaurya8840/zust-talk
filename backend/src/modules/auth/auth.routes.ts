@@ -62,7 +62,6 @@ router.post("/change-password", requireAuth, validateBody(changePasswordSchema),
 // Password-based authentication
 router.post("/register", validateBody(registerSchema), asyncHandler(controller.register));
 router.post("/login", validateBody(loginSchema), asyncHandler(controller.login));
-router.post("/guest", asyncHandler(controller.guestLogin));
 
 // Legacy OTP-based authentication
 router.post("/otp/request", validateBody(requestOtpSchema), asyncHandler(controller.requestOtp));

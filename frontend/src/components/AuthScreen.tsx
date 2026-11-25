@@ -15,7 +15,6 @@ import {
   User,
   AtSign,
   Mail,
-  Zap,
   Moon,
   Sun,
   KeyRound,
@@ -35,7 +34,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   isDark = false,
   onToggleTheme,
 }) => {
-  const { loginWithPassword, registerWithPassword, loginAsGuest } = useAuth();
+  const { loginWithPassword, registerWithPassword } = useAuth();
   const [mode, setMode] = useState<"SIGNIN" | "REGISTER" | "FORGOT">("SIGNIN");
 
   // Sign In state
@@ -256,18 +255,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     }
   };
 
-  const handleGuestLogin = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      await loginAsGuest();
-    } catch (err: any) {
-      setError(err.message || "Failed to continue as guest");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <div className="h-dvh w-screen overflow-y-auto bg-slate-950 text-white relative flex flex-col justify-between">
       {/* Aesthetic Soft Aurora Background */}
@@ -402,16 +389,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 >
                   <span>{loading ? "Signing in..." : t.signInBtn}</span>
                   <ArrowRight className="w-4 h-4" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleGuestLogin}
-                  disabled={loading}
-                  className="w-full py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl font-semibold text-xs transition-all flex items-center justify-center space-x-1.5"
-                >
-                  <Zap className="w-3.5 h-3.5 text-amber-500" />
-                  <span>{t.continueAsGuest}</span>
                 </button>
               </form>
             )}

@@ -125,6 +125,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastAlertSentRef = useRef<number>(0);
+  const suppressAlertUntilRef = useRef<number>(0);
+  const lastModifierAtRef = useRef<number>(0);
+  const overlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Back Button handlers
   useBackLayer("chat-camera", 105, isCameraOpen, () => setIsCameraOpen(false));
@@ -171,34 +174,105 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     lastAlertSentRef.current = now;
     const localMsg =
       kind === "screen_record"
-        ? "🚨 Screen recording detected!"
-        : "📸 Screenshot detected!";
+        ? "🚨 Screen recording detected! Alert posted in chat."
+        : "📸 Screenshot detected! Alert posted in chat.";
     setSecurityBanner(localMsg);
     setTimeout(() => {
       setSecurityBanner((curr) => (curr === localMsg ? null : curr));
     }, 5000);
-    socket?.emit("chat:security_alert", { conversationId: conversation.id, kind });
+
+    api.conversations
+      .sendSecurityAlert(conversation.id, kind)
+      .then((res) => {
+        if (res?.success && res.message) {
+          setMessages((prev) => (prev.some((m) => m.id === res.message.id) ? prev : [...prev, res.message]));
+          onConversationUpdated();
+        }
+      })
+      .catch(() => {
+        socket?.emit("chat:security_alert", { conversationId: conversation.id, kind });
+      });
   };
 
   // Screenshot & Screen Recording Detection + View-Once Blur Protection
   useEffect(() => {
     const checkKeyEvent = (e: KeyboardEvent) => {
       const key = (e.key || "").toLowerCase();
+      if (e.metaKey || e.shiftKey || e.altKey || key === "meta" || key === "os" || key === "shift") {
+        lastModifierAtRef.current = Date.now();
+      }
       const isPrintScreen =
         e.key === "PrintScreen" || e.code === "PrintScreen" || e.keyCode === 44;
-      const isMacScreenshot = e.metaKey && e.shiftKey && ["3", "4", "5"].includes(key);
+      const isMacScreenshot = e.metaKey && e.shiftKey && ["3", "4", "5", "6"].includes(key);
       const isWinSnip = e.metaKey && e.shiftKey && key === "s";
-      if (isPrintScreen || isMacScreenshot || isWinSnip) {
+      const isWebCapture = e.ctrlKey && e.shiftKey && key === "s";
+      const isPrintShortcut = (e.ctrlKey || e.metaKey) && key === "p";
+      const isScreenRecShortcut =
+        (e.metaKey && e.altKey && key === "r") ||
+        (e.metaKey && key === "g") ||
+        (e.ctrlKey && e.shiftKey && key === "r");
+
+      if (isScreenRecShortcut) {
+        triggerSecurityAlert("screen_record");
+      } else if (isPrintScreen || isMacScreenshot || isWinSnip || isWebCapture || isPrintShortcut) {
         triggerSecurityAlert("screenshot");
       }
     };
 
-    const handleBlur = () => setIsWindowBlurred(true);
-    const handleFocus = () => setIsWindowBlurred(false);
-    const handleVis = () => setIsWindowBlurred(document.visibilityState === "hidden");
+    const handleBeforePrint = () => {
+      triggerSecurityAlert("screenshot");
+    };
 
-    window.addEventListener("keydown", checkKeyEvent);
-    window.addEventListener("keyup", checkKeyEvent);
+    const handleBlur = () => {
+      setIsWindowBlurred(true);
+      if (overlayTimerRef.current) {
+        clearTimeout(overlayTimerRef.current);
+        overlayTimerRef.current = null;
+      }
+      if (Date.now() < suppressAlertUntilRef.current) return;
+      if (document.activeElement?.tagName === "SELECT") return;
+
+      if (document.visibilityState === "visible") {
+        if (Date.now() - lastModifierAtRef.current < 1500) {
+          triggerSecurityAlert("screenshot");
+          return;
+        }
+        // Catch OS snipping overlay / mobile quick-settings screenshot/record panel floating above visible tab
+        overlayTimerRef.current = setTimeout(() => {
+          overlayTimerRef.current = null;
+          if (
+            document.visibilityState === "visible" &&
+            !document.hasFocus() &&
+            Date.now() >= suppressAlertUntilRef.current
+          ) {
+            triggerSecurityAlert("screenshot");
+          }
+        }, 450);
+      }
+    };
+
+    const handleFocus = () => {
+      setIsWindowBlurred(false);
+      if (overlayTimerRef.current) {
+        clearTimeout(overlayTimerRef.current);
+        overlayTimerRef.current = null;
+      }
+    };
+
+    const handleVis = () => {
+      const hidden = document.visibilityState === "hidden";
+      setIsWindowBlurred(hidden);
+      if (hidden && overlayTimerRef.current) {
+        clearTimeout(overlayTimerRef.current);
+        overlayTimerRef.current = null;
+      }
+    };
+
+    window.addEventListener("keydown", checkKeyEvent, true);
+    window.addEventListener("keyup", checkKeyEvent, true);
+    document.addEventListener("keydown", checkKeyEvent, true);
+    document.addEventListener("keyup", checkKeyEvent, true);
+    window.addEventListener("beforeprint", handleBeforePrint);
     window.addEventListener("blur", handleBlur);
     window.addEventListener("focus", handleFocus);
     document.addEventListener("visibilitychange", handleVis);
@@ -213,8 +287,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
 
     return () => {
-      window.removeEventListener("keydown", checkKeyEvent);
-      window.removeEventListener("keyup", checkKeyEvent);
+      if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
+      window.removeEventListener("keydown", checkKeyEvent, true);
+      window.removeEventListener("keyup", checkKeyEvent, true);
+      document.removeEventListener("keydown", checkKeyEvent, true);
+      document.removeEventListener("keyup", checkKeyEvent, true);
+      window.removeEventListener("beforeprint", handleBeforePrint);
       window.removeEventListener("blur", handleBlur);
       window.removeEventListener("focus", handleFocus);
       document.removeEventListener("visibilitychange", handleVis);
@@ -466,6 +544,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   };
 
   const startRecording = async () => {
+    suppressAlertUntilRef.current = Date.now() + 8000;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
@@ -795,7 +874,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         <div className="flex items-center space-x-1 shrink-0">
           <button
             type="button"
-            onClick={() => (conversation.type === "GROUP" ? onStartGroupCall?.(false) : onStartCall?.(false))}
+            onClick={() => {
+              suppressAlertUntilRef.current = Date.now() + 8000;
+              conversation.type === "GROUP" ? onStartGroupCall?.(false) : onStartCall?.(false);
+            }}
             title={conversation.type === "GROUP" ? "Group Audio Call" : "Audio Call"}
             className="p-2 text-slate-600 dark:text-slate-300 hover:text-emerald-600 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 rounded-xl transition-colors"
           >
@@ -804,7 +886,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
           <button
             type="button"
-            onClick={() => (conversation.type === "GROUP" ? onStartGroupCall?.(true) : onStartCall?.(true))}
+            onClick={() => {
+              suppressAlertUntilRef.current = Date.now() + 8000;
+              conversation.type === "GROUP" ? onStartGroupCall?.(true) : onStartCall?.(true);
+            }}
             title={conversation.type === "GROUP" ? "Group Video Call" : "Video Call"}
             className="px-2.5 py-2 text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 rounded-xl transition-all shadow-sm flex items-center space-x-1"
           >
@@ -1343,6 +1428,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <Languages className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
               <select
                 value={sourceLang}
+                onMouseDown={() => {
+                  suppressAlertUntilRef.current = Date.now() + 8000;
+                }}
                 onChange={(e) => handleChangeSourceLang(e.target.value)}
                 aria-label="Source Language"
                 className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-lg px-2 py-1 text-[11px] font-semibold focus:outline-none border border-slate-200 dark:border-slate-700 max-w-[110px]"
@@ -1356,6 +1444,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <span className="text-slate-400">→</span>
               <select
                 value={targetLang}
+                onMouseDown={() => {
+                  suppressAlertUntilRef.current = Date.now() + 8000;
+                }}
                 onChange={(e) => handleChangeTargetLang(e.target.value)}
                 aria-label="Target Language"
                 className="bg-emerald-600 text-white rounded-lg px-2 py-1 text-[11px] font-bold focus:outline-none border border-emerald-600 max-w-[140px]"
@@ -1425,7 +1516,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             />
             <button
               type="button"
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => {
+                suppressAlertUntilRef.current = Date.now() + 12000;
+                fileInputRef.current?.click();
+              }}
               title="Attach File"
               className="p-2 text-slate-500 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl shrink-0"
             >
@@ -1434,7 +1528,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
             <button
               type="button"
-              onClick={() => setIsCameraOpen(true)}
+              onClick={() => {
+                suppressAlertUntilRef.current = Date.now() + 12000;
+                setIsCameraOpen(true);
+              }}
               title="Take Photo"
               className="p-2 text-slate-500 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl shrink-0"
             >

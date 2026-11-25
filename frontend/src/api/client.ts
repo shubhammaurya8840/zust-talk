@@ -160,11 +160,6 @@ export const api = {
         body: JSON.stringify(data),
       }),
 
-    guest: () =>
-      request<{ success: boolean; user: User; accessToken: string; refreshToken: string }>("/api/auth/guest", {
-        method: "POST",
-      }),
-
     requestOtp: (destination: string) =>
       request<{
         success: boolean;
@@ -220,6 +215,23 @@ export const api = {
         body: JSON.stringify(data),
       }),
 
+    sendEmailVerificationOtp: (email: string) =>
+      request<{
+        success: boolean;
+        message: string;
+        deliveryMode: string;
+        devOtp?: string;
+      }>("/api/users/me/email/send-otp", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      }),
+
+    verifyAndUpdateEmail: (email: string, code: string) =>
+      request<{ success: boolean; message: string; user: User }>("/api/users/me/email/verify", {
+        method: "POST",
+        body: JSON.stringify({ email, code }),
+      }),
+
     block: (userId: string) =>
       request<{ success: boolean; message: string }>(`/api/users/${userId}/block`, { method: "POST" }),
 
@@ -246,6 +258,15 @@ export const api = {
         {
           method: "POST",
           body: JSON.stringify({ archived }),
+        }
+      ),
+
+    sendSecurityAlert: (conversationId: string, kind: "screenshot" | "screen_record") =>
+      request<{ success: boolean; message: Message }>(
+        `/api/conversations/${conversationId}/security-alert`,
+        {
+          method: "POST",
+          body: JSON.stringify({ kind }),
         }
       ),
 
