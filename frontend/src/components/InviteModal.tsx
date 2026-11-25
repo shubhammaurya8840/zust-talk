@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { User } from "../types";
-import { X, Copy, Check, QrCode, Share2 } from "lucide-react";
+import { X, Copy, Check, QrCode } from "lucide-react";
 
 interface InviteModalProps {
   isOpen: boolean;
@@ -21,22 +21,30 @@ export const InviteModal: React.FC<InviteModalProps> = ({ isOpen, onClose, user 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl border border-slate-100 overflow-hidden text-center p-6">
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-fadeIn"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-sm shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden text-center p-6 animate-scaleIn"
+      >
         <div className="flex justify-between items-center mb-4">
-          <h3 className="text-sm font-bold text-slate-800 flex items-center space-x-1.5">
+          <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-1.5">
             <QrCode className="w-4 h-4 text-emerald-600" />
             <span>My QR Code & Invite</span>
           </h3>
-          <button onClick={onClose} className="p-1 text-slate-400 hover:text-slate-600 rounded-lg">
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl"
+          >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* QR Code SVG Visual */}
-        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 mx-auto w-48 h-48 flex flex-col items-center justify-center shadow-inner mb-4 relative">
-          <svg className="w-36 h-36 text-slate-800" viewBox="0 0 100 100" fill="currentColor">
-            {/* Standard stylized QR pattern */}
+        <div className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-6 mx-auto w-48 h-48 flex flex-col items-center justify-center shadow-inner mb-4 relative">
+          <svg className="w-36 h-36 text-slate-800 dark:text-slate-100" viewBox="0 0 100 100" fill="currentColor">
             <rect x="10" y="10" width="24" height="24" rx="4" fill="none" stroke="currentColor" strokeWidth="6" />
             <rect x="17" y="17" width="10" height="10" rx="2" fill="currentColor" />
             <rect x="66" y="10" width="24" height="24" rx="4" fill="none" stroke="currentColor" strokeWidth="6" />
@@ -62,18 +70,18 @@ export const InviteModal: React.FC<InviteModalProps> = ({ isOpen, onClose, user 
           </div>
         </div>
 
-        <h4 className="font-bold text-slate-800 text-base">{user.displayName}</h4>
+        <h4 className="font-bold text-slate-800 dark:text-slate-100 text-base">{user.displayName}</h4>
         <p className="text-xs text-slate-400 mb-4">@{user.username}</p>
 
-        {/* Copy Link Input */}
-        <div className="flex items-center space-x-1.5 p-1.5 bg-slate-100 rounded-xl border border-slate-200 text-xs">
+        <div className="flex items-center space-x-1.5 p-1.5 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
           <input
             type="text"
             readOnly
             value={inviteUrl}
-            className="bg-transparent flex-1 px-2 text-slate-600 outline-none select-all truncate text-[11px]"
+            className="bg-transparent flex-1 px-2 text-slate-600 dark:text-slate-300 outline-none select-all truncate text-[11px]"
           />
           <button
+            type="button"
             onClick={handleCopy}
             className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors flex items-center space-x-1 shrink-0"
           >
@@ -83,7 +91,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({ isOpen, onClose, user 
         </div>
 
         <p className="text-[11px] text-slate-400 mt-3">
-          Share this link or QR with friends in India to chat with you directly.
+          Share this link or QR with friends to chat with you directly on Zust Talk.
         </p>
       </div>
     </div>

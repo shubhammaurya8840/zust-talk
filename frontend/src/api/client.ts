@@ -267,4 +267,19 @@ export const api = {
       return res.file;
     },
   },
+
+  translate: {
+    convert: (text: string, targetLang: "en" | "hi" = "en") =>
+      request<{
+        success: boolean;
+        originalText: string;
+        translatedText: string;
+        intermediateHindi?: string;
+        detectedSource: string;
+        converted: boolean;
+      }>("/api/translate", {
+        method: "POST",
+        body: JSON.stringify({ text, targetLang }),
+      }),
+  },
 };

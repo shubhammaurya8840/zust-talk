@@ -36,19 +36,29 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[70vh]">
-        <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-fadeIn"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-sm shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[75dvh] animate-scaleIn"
+      >
+        <div className="p-4 bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <Forward className="w-4 h-4 text-emerald-600" />
-            <h3 className="text-sm font-bold text-slate-800">Forward Message</h3>
+            <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">Forward Message</h3>
           </div>
-          <button onClick={onClose} className="p-1 text-slate-400 hover:text-slate-600 rounded-lg">
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl"
+          >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="p-3 bg-slate-100 border-b border-slate-200 text-xs text-slate-600 italic truncate">
+        <div className="p-3 bg-slate-100 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300 italic truncate">
           "{message.body || "Attachment"}"
         </div>
 
@@ -63,27 +73,31 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({
                 key={c.id}
                 onClick={() => setSelectedId(c.id)}
                 className={`p-2.5 rounded-xl cursor-pointer flex items-center justify-between text-xs transition-colors ${
-                  isSelected ? "bg-emerald-50 border border-emerald-300 text-emerald-900 font-semibold" : "hover:bg-slate-50 text-slate-700"
+                  isSelected
+                    ? "bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-700 text-emerald-900 dark:text-emerald-200 font-semibold"
+                    : "hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300"
                 }`}
               >
                 <span className="truncate">{c.title || "Direct Chat"}</span>
-                {isSelected && <span className="text-[10px] font-bold text-emerald-600">Selected</span>}
+                {isSelected && <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">Selected</span>}
               </div>
             );
           })}
         </div>
 
-        <div className="p-3 bg-slate-50 border-t border-slate-200 flex justify-end space-x-2">
+        <div className="p-3 bg-slate-50 dark:bg-slate-800/70 border-t border-slate-200 dark:border-slate-800 flex justify-end space-x-2">
           <button
+            type="button"
             onClick={onClose}
-            className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-200 rounded-lg"
+            className="px-3 py-1.5 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl"
           >
             Cancel
           </button>
           <button
+            type="button"
             onClick={handleSendForward}
             disabled={!selectedId || loading}
-            className="px-4 py-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold disabled:opacity-50 flex items-center space-x-1"
+            className="px-4 py-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-semibold disabled:opacity-50 flex items-center space-x-1"
           >
             <Send className="w-3.5 h-3.5" />
             <span>Forward</span>

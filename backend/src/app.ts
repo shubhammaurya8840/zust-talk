@@ -9,6 +9,7 @@ import conversationRoutes from "./modules/conversations/conversations.routes";
 import messageRoutes from "./modules/messages/messages.routes";
 import uploadRoutes from "./modules/uploads/uploads.routes";
 import reportRoutes from "./modules/reports/reports.routes";
+import translateRoutes from "./modules/translate/translate.routes";
 import { notFound, errorHandler } from "./middleware/error";
 import { env } from "./config/env";
 
@@ -27,6 +28,7 @@ app.use("/api/conversations", conversationRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/uploads", uploadRoutes);
 app.use("/api/reports", reportRoutes);
+app.use("/api/translate", translateRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

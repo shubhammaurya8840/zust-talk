@@ -344,4 +344,39 @@ describe("India Chat Backend API Tests", () => {
     });
     expect(unblockRes.status).toBe(200);
   });
+
+  it("11. Translate - Hindi & Hinglish to English", async () => {
+    const res1 = await fetch(`${baseUrl}/api/translate`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${user1Token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        text: "kaise ho bhai",
+        targetLang: "en"
+      })
+    });
+    expect(res1.status).toBe(200);
+    const data1 = await res1.json();
+    expect(data1.success).toBe(true);
+    expect(typeof data1.translatedText).toBe("string");
+    expect(data1.translatedText.length).toBeGreaterThan(0);
+
+    const res2 = await fetch(`${baseUrl}/api/translate`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${user1Token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        text: "नमस्ते, मैं घर जा रहा हूँ",
+        targetLang: "en"
+      })
+    });
+    expect(res2.status).toBe(200);
+    const data2 = await res2.json();
+    expect(data2.success).toBe(true);
+    expect(data2.detectedSource).toBe("hi");
+  });
 });
