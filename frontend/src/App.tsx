@@ -15,7 +15,8 @@ import { GroupInfoDrawer } from "./components/GroupInfoDrawer";
 import { InviteModal } from "./components/InviteModal";
 import { CallModal, ActiveCallState } from "./components/CallModal";
 import { GroupCallModal, ActiveGroupCallState } from "./components/GroupCallModal";
-import { MessageSquare, Plus, QrCode } from "lucide-react";
+import { NearbyRadarPage } from "./components/NearbyRadarPage";
+import { MessageSquare, Plus, QrCode, Radar } from "lucide-react";
 
 export const AppContent: React.FC = () => {
   const { user, loading } = useAuth();
@@ -31,6 +32,8 @@ export const AppContent: React.FC = () => {
   const [viewingUser, setViewingUser] = useState<User | null>(null);
   const [isGroupInfoOpen, setIsGroupInfoOpen] = useState(false);
   const [isInviteOpen, setIsInviteOpen] = useState(false);
+  const [isRadarOpen, setIsRadarOpen] = useState(false);
+  const [pendingRadarRequests, setPendingRadarRequests] = useState(0);
   const [activeCall, setActiveCall] = useState<ActiveCallState | null>(null);
   const [activeGroupCall, setActiveGroupCall] = useState<ActiveGroupCallState | null>(null);
   const [isCallMinimized, setIsCallMinimized] = useState(false);
@@ -57,6 +60,7 @@ export const AppContent: React.FC = () => {
   useBackLayer("profile-modal", 60, isProfileOpen, () => setIsProfileOpen(false));
   useBackLayer("invite-modal", 60, isInviteOpen, () => setIsInviteOpen(false));
   useBackLayer("group-info-drawer", 50, isGroupInfoOpen, () => setIsGroupInfoOpen(false));
+  useBackLayer("nearby-radar", 45, isRadarOpen, () => setIsRadarOpen(false));
   useBackLayer("active-conversation", 40, Boolean(activeConversationId), () => {
     setActiveConversationId(null);
     setIsGroupInfoOpen(false);
@@ -91,6 +95,10 @@ export const AppContent: React.FC = () => {
   useEffect(() => {
     if (user) {
       loadConversations();
+      api.nearby
+        .getRequests()
+        .then((res) => setPendingRadarRequests((res.incoming || []).length))
+        .catch(() => {});
     }
   }, [user, loadConversations]);
 
@@ -168,8 +176,18 @@ export const AppContent: React.FC = () => {
       });
     };
 
+    const refreshRadarBadge = () => {
+      api.nearby
+        .getRequests()
+        .then((res) => setPendingRadarRequests((res.incoming || []).length))
+        .catch(() => {});
+    };
+
     socket.on("call:incoming", handleIncomingCall);
     socket.on("group-call:incoming", handleIncomingGroupCall);
+    socket.on("nearby:request-received", refreshRadarBadge);
+    socket.on("nearby:request-cancelled", refreshRadarBadge);
+    socket.on("nearby:request-accepted", loadConversations);
 
     return () => {
       socket.off("conversation:updated", handleConversationUpdated);
@@ -177,6 +195,9 @@ export const AppContent: React.FC = () => {
       socket.off("user:updated", handleConversationUpdated);
       socket.off("call:incoming", handleIncomingCall);
       socket.off("group-call:incoming", handleIncomingGroupCall);
+      socket.off("nearby:request-received", refreshRadarBadge);
+      socket.off("nearby:request-cancelled", refreshRadarBadge);
+      socket.off("nearby:request-accepted", loadConversations);
     };
   }, [socket, loadConversations]);
 
@@ -260,19 +281,26 @@ export const AppContent: React.FC = () => {
     <div className="fixed inset-0 h-dvh w-screen flex bg-slate-100 dark:bg-slate-950 overflow-hidden font-sans">
       <div
         className={`h-full min-h-0 overflow-hidden ${
-          activeConversationId ? "hidden md:flex" : "flex"
+          activeConversationId || isRadarOpen ? "hidden md:flex" : "flex"
         } w-full md:w-auto`}
       >
         <Sidebar
           conversations={conversations}
-          activeId={activeConversationId}
+          activeId={isRadarOpen ? null : activeConversationId}
           onSelect={(id) => {
+            setIsRadarOpen(false);
             setActiveConversationId(id);
             setIsGroupInfoOpen(false);
           }}
           onNewChat={() => setIsNewChatOpen(true)}
           onOpenProfile={() => setIsProfileOpen(true)}
           onOpenInvite={() => setIsInviteOpen(true)}
+          onOpenRadar={() => {
+            setIsRadarOpen(true);
+            setIsGroupInfoOpen(false);
+          }}
+          isRadarActive={isRadarOpen}
+          pendingRadarRequests={pendingRadarRequests}
           onToggleArchive={handleToggleArchive}
           lang={lang}
           onToggleLang={toggleLanguage}
@@ -283,10 +311,20 @@ export const AppContent: React.FC = () => {
 
       <div
         className={`h-full min-h-0 min-w-0 flex-1 flex flex-col overflow-hidden ${
-          !activeConversationId ? "hidden md:flex" : "flex"
+          !activeConversationId && !isRadarOpen ? "hidden md:flex" : "flex"
         }`}
       >
-        {activeConversation ? (
+        {isRadarOpen ? (
+          <NearbyRadarPage
+            onBack={() => setIsRadarOpen(false)}
+            onRequestsCountChange={setPendingRadarRequests}
+            onOpenConversation={(convId) => {
+              setIsRadarOpen(false);
+              loadConversations();
+              setActiveConversationId(convId);
+            }}
+          />
+        ) : activeConversation ? (
           <ChatArea
             key={activeConversation.id}
             conversation={activeConversation}
@@ -330,6 +368,14 @@ export const AppContent: React.FC = () => {
                 >
                   <QrCode className="w-4 h-4 text-emerald-600" />
                   <span>QR & Scan</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsRadarOpen(true)}
+                  className="px-4 py-2.5 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded-xl text-xs font-bold flex items-center space-x-1.5"
+                >
+                  <Radar className="w-4 h-4" />
+                  <span>Nearby Radar</span>
                 </button>
               </div>
             </div>

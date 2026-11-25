@@ -1,4 +1,4 @@
-import { User, Conversation, Message } from "../types";
+import { User, Conversation, Message, NearbyUser, ConnectionRequestItem } from "../types";
 
 const TOKEN_KEY = "india_chat_access_token";
 const REFRESH_KEY = "india_chat_refresh_token";
@@ -309,6 +309,80 @@ export const api = {
       }>("/api/translate", {
         method: "POST",
         body: JSON.stringify({ text, targetLang, sourceLang }),
+      }),
+  },
+
+  nearby: {
+    getSettings: () =>
+      request<{
+        success: boolean;
+        settings: {
+          discoveryEnabled: boolean;
+          invisibleMode: boolean;
+          isPresenceActive: boolean;
+        };
+      }>("/api/nearby/settings"),
+
+    updateSettings: (data: { discoveryEnabled?: boolean; invisibleMode?: boolean }) =>
+      request<{
+        success: boolean;
+        settings: {
+          discoveryEnabled: boolean;
+          invisibleMode: boolean;
+        };
+      }>("/api/nearby/settings", {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+
+    scan: (payload: { latitude: number; longitude: number; accuracy?: number }) =>
+      request<{
+        success: boolean;
+        nearbyUsers: NearbyUser[];
+        scannedAt: string;
+        expiresInSeconds: number;
+      }>("/api/nearby/scan", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+
+    stop: () =>
+      request<{ success: boolean }>("/api/nearby/stop", {
+        method: "POST",
+      }),
+
+    getRequests: () =>
+      request<{
+        success: boolean;
+        incoming: ConnectionRequestItem[];
+        outgoing: ConnectionRequestItem[];
+      }>("/api/nearby/requests"),
+
+    sendRequest: (toUserId: string, message?: string) =>
+      request<{
+        success: boolean;
+        request: ConnectionRequestItem;
+        conversationId?: string;
+        alreadyConnected?: boolean;
+        autoAccepted?: boolean;
+      }>("/api/nearby/requests", {
+        method: "POST",
+        body: JSON.stringify({ toUserId, message }),
+      }),
+
+    respondRequest: (requestId: string, action: "ACCEPT" | "REJECT") =>
+      request<{
+        success: boolean;
+        request: ConnectionRequestItem;
+        conversationId?: string;
+      }>(`/api/nearby/requests/${requestId}/respond`, {
+        method: "POST",
+        body: JSON.stringify({ action }),
+      }),
+
+    cancelRequest: (requestId: string) =>
+      request<{ success: boolean }>(`/api/nearby/requests/${requestId}`, {
+        method: "DELETE",
       }),
   },
 };

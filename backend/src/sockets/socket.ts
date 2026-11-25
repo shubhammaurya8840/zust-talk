@@ -91,6 +91,15 @@ export function initializeSocket(server: HttpServer) {
       }
     });
 
+    // Nearby Radar watcher room for instant real-time radar updates
+    socket.on("nearby:join", () => {
+      socket.join("nearby:watchers");
+    });
+
+    socket.on("nearby:leave", () => {
+      socket.leave("nearby:watchers");
+    });
+
     socket.on("typing:start", async (conversationId: string) => {
       const members = await prisma.conversationMember.findMany({
         where: { conversationId },
@@ -290,6 +299,15 @@ export function initializeSocket(server: HttpServer) {
           const lastSeen = new Date();
           prisma.user.update({ where: { id: userId }, data: { lastSeenAt: lastSeen } }).catch(() => {});
           io.emit("presence:update", { userId, isOnline: false, lastSeenAt: lastSeen.toISOString() });
+
+          // Immediately expire ephemeral nearby presence when user disconnects
+          prisma.nearbyPresence.deleteMany({ where: { userId } })
+            .then((del) => {
+              if (del.count > 0) {
+                io.to("nearby:watchers").emit("nearby:users-removed", { userIds: [userId] });
+              }
+            })
+            .catch(() => {});
         }
       }
 

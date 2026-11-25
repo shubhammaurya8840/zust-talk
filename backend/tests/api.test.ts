@@ -486,4 +486,132 @@ describe("India Chat Backend API Tests", () => {
     });
     expect(secondOpen.status).toBe(410);
   });
+
+  it("13. Nearby Radar - Consent, 100m Radius, Privacy, Invisible Mode & Connection Requests", async () => {
+    // 1. Scanning without consent must fail with 403
+    const deniedScan = await fetch(`${baseUrl}/api/nearby/scan`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${user1Token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ latitude: 28.6139, longitude: 77.2090 })
+    });
+    expect(deniedScan.status).toBe(403);
+
+    // 2. Both users enable Nearby Discovery
+    const s1 = await fetch(`${baseUrl}/api/nearby/settings`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ discoveryEnabled: true, invisibleMode: false })
+    });
+    expect(s1.status).toBe(200);
+
+    const s2 = await fetch(`${baseUrl}/api/nearby/settings`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${user2Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ discoveryEnabled: true, invisibleMode: false })
+    });
+    expect(s2.status).toBe(200);
+
+    // 3. User 2 scans ~44m away from User 1
+    const scan2 = await fetch(`${baseUrl}/api/nearby/scan`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user2Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ latitude: 28.6143, longitude: 77.2090 })
+    });
+    expect(scan2.status).toBe(200);
+
+    // 4. User 1 scans -> discovers User 2 with approximate distance & ZERO private fields
+    const scan1 = await fetch(`${baseUrl}/api/nearby/scan`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ latitude: 28.6139, longitude: 77.2090 })
+    });
+    expect(scan1.status).toBe(200);
+    const scan1Data = await scan1.json();
+    const foundU2 = scan1Data.nearbyUsers.find((u: any) => u.id === user2Id);
+    expect(foundU2).toBeDefined();
+    expect(foundU2.distanceMeters).toBeLessThanOrEqual(100);
+    expect(foundU2.latitude).toBeUndefined();
+    expect(foundU2.longitude).toBeUndefined();
+    expect(foundU2.phone).toBeUndefined();
+    expect(foundU2.email).toBeUndefined();
+    expect(Array.isArray(foundU2.commonGroups)).toBe(true);
+
+    // 5. User 2 moves > 150m away -> disappears from User 1's 100m radar
+    await fetch(`${baseUrl}/api/nearby/scan`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user2Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ latitude: 28.6155, longitude: 77.2090 })
+    });
+    const scan1Far = await fetch(`${baseUrl}/api/nearby/scan`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ latitude: 28.6139, longitude: 77.2090 })
+    });
+    const scan1FarData = await scan1Far.json();
+    expect(scan1FarData.nearbyUsers.some((u: any) => u.id === user2Id)).toBe(false);
+
+    // 6. User 2 moves back within 100m then enables Invisible Mode -> immediately hidden
+    await fetch(`${baseUrl}/api/nearby/scan`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user2Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ latitude: 28.6141, longitude: 77.2090 })
+    });
+    await fetch(`${baseUrl}/api/nearby/settings`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${user2Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ invisibleMode: true })
+    });
+    const scan1Inv = await fetch(`${baseUrl}/api/nearby/scan`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ latitude: 28.6139, longitude: 77.2090 })
+    });
+    expect((await scan1Inv.json()).nearbyUsers.some((u: any) => u.id === user2Id)).toBe(false);
+
+    // 7. Re-enable visibility & test connection request + duplicate prevention + accept
+    await fetch(`${baseUrl}/api/nearby/settings`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${user2Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ invisibleMode: false })
+    });
+    const reqRes = await fetch(`${baseUrl}/api/nearby/requests`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ toUserId: user2Id, message: "Hi from nearby!" })
+    });
+    expect(reqRes.status).toBe(201);
+    const reqData = await reqRes.json();
+    const requestId = reqData.request.id;
+
+    // Duplicate request blocked
+    const dupRes = await fetch(`${baseUrl}/api/nearby/requests`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ toUserId: user2Id })
+    });
+    expect(dupRes.status).toBe(409);
+
+    // User 2 accepts request
+    const accRes = await fetch(`${baseUrl}/api/nearby/requests/${requestId}/respond`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user2Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "ACCEPT" })
+    });
+    expect(accRes.status).toBe(200);
+    const accData = await accRes.json();
+    expect(accData.conversationId).toBeDefined();
+
+    // Clean up ephemeral nearby presence
+    await fetch(`${baseUrl}/api/nearby/stop`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user1Token}` }
+    });
+    await fetch(`${baseUrl}/api/nearby/stop`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user2Token}` }
+    });
+  });
 });

@@ -72,3 +72,42 @@ export interface Conversation {
   members: ConversationMember[];
   messages: Message[];
 }
+
+export interface NearbyCommonGroup {
+  id: string;
+  title: string;
+}
+
+export type NearbyConnectionStatus =
+  | 'NONE'
+  | 'PENDING_SENT'
+  | 'PENDING_RECEIVED'
+  | 'CONNECTED'
+  | 'REJECTED';
+
+export interface NearbyUser {
+  id: string;
+  username: string;
+  displayName: string;
+  avatarUrl?: string | null;
+  bio?: string | null;
+  isOnline?: boolean;
+  lastSeenAt?: string | null;
+  distanceMeters: number;
+  commonGroups: NearbyCommonGroup[];
+  connectionStatus: NearbyConnectionStatus;
+  requestId?: string;
+  conversationId?: string;
+  lastActiveAt?: string;
+}
+
+export interface ConnectionRequestItem {
+  id: string;
+  senderId: string;
+  receiverId: string;
+  status: 'PENDING' | 'ACCEPTED' | 'REJECTED';
+  message?: string | null;
+  createdAt: string;
+  sender?: User;
+  receiver?: User;
+}

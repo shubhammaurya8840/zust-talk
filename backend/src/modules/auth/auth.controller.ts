@@ -289,6 +289,7 @@ export async function refresh(req: Request, res: Response) {
 
 export async function logout(req: Request, res: Response) {
   if (req.auth?.sessionId) await prisma.session.updateMany({ where: { id: req.auth.sessionId, userId: req.auth.userId }, data: { revokedAt: new Date() } });
+  if (req.auth?.userId) await prisma.nearbyPresence.deleteMany({ where: { userId: req.auth.userId } }).catch(() => {});
   res.json({ success: true, message: "Logged out" });
 }
 

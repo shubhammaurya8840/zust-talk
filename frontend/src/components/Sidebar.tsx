@@ -16,6 +16,7 @@ import {
   Sun,
   X,
   Archive,
+  Radar,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -25,6 +26,9 @@ interface SidebarProps {
   onNewChat: () => void;
   onOpenProfile: () => void;
   onOpenInvite: () => void;
+  onOpenRadar?: () => void;
+  isRadarActive?: boolean;
+  pendingRadarRequests?: number;
   onToggleArchive?: (conversationId: string, archived: boolean) => void;
   lang: Language;
   onToggleLang: () => void;
@@ -39,6 +43,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onNewChat,
   onOpenProfile,
   onOpenInvite,
+  onOpenRadar,
+  isRadarActive = false,
+  pendingRadarRequests = 0,
   onToggleArchive,
   lang,
   onToggleLang,
@@ -231,6 +238,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <span>Archived{archivedCount > 0 ? ` (${archivedCount})` : ""}</span>
           </button>
         </div>
+
+        {/* Dedicated Nearby Radar Entry */}
+        {onOpenRadar && (
+          <button
+            type="button"
+            onClick={onOpenRadar}
+            className={`w-full px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-between transition-all border ${
+              isRadarActive
+                ? "bg-emerald-600 text-white border-emerald-600 shadow-sm"
+                : "bg-emerald-50/80 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200/80 dark:border-emerald-900 hover:bg-emerald-100 dark:hover:bg-emerald-950/70"
+            }`}
+          >
+            <span className="flex items-center space-x-2">
+              <Radar className="w-4 h-4 shrink-0" />
+              <span>Nearby Radar (100m)</span>
+            </span>
+            {pendingRadarRequests > 0 ? (
+              <span className="px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 text-[10px] font-extrabold">
+                {pendingRadarRequests} new
+              </span>
+            ) : (
+              <span className="text-[10px] opacity-80">Scan</span>
+            )}
+          </button>
+        )}
       </div>
 
       {/* Conversations List */}
