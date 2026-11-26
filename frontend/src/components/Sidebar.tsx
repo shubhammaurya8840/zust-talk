@@ -19,6 +19,7 @@ import {
   Bell,
   MoreVertical,
   Lock,
+  Bot,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -31,6 +32,8 @@ interface SidebarProps {
   onOpenSecurity?: () => void;
   onOpenRadar?: () => void;
   isRadarActive?: boolean;
+  onOpenAssistant?: () => void;
+  isAssistantActive?: boolean;
   pendingRadarRequests?: number;
   onToggleArchive?: (conversationId: string, archived: boolean) => void;
   notificationPermission?: NotificationPermission | "unsupported";
@@ -50,6 +53,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenSecurity,
   onOpenRadar,
   isRadarActive = false,
+  onOpenAssistant,
+  isAssistantActive = false,
   pendingRadarRequests = 0,
   onToggleArchive,
   notificationPermission,
@@ -156,6 +161,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <QrCode className="w-4 h-4" />
           </button>
+
+          {onOpenAssistant && (
+            <button
+              type="button"
+              onClick={onOpenAssistant}
+              title="Personal AI Assistant"
+              aria-label="Open Personal AI Assistant"
+              className={`p-2 rounded-xl transition-all ${
+                isAssistantActive
+                  ? "bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-500/30"
+                  : "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/50"
+              }`}
+            >
+              <Bot className="w-4 h-4" />
+            </button>
+          )}
 
           {onOpenRadar && (
             <button
@@ -416,6 +437,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         ? "This message was deleted"
                         : lastMsg?.isViewOnce
                         ? "📷 View once photo"
+                        : lastMsg?.type === "POLL"
+                        ? lastMsg.body || "📊 Poll"
                         : lastMsg?.body || (lastMsg?.attachments?.length ? "Shared an attachment" : "Tap to start chatting")}
                     </span>
                   </div>

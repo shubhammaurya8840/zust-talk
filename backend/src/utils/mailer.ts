@@ -292,3 +292,44 @@ export async function sendOtpEmail(params: {
     return { mode: "console" };
   }
 }
+
+export async function sendReminderEmail(params: {
+  to: string;
+  reminderText: string;
+  scheduledAtLabel: string;
+}): Promise<EmailDeliveryResult> {
+  const { to, reminderText, scheduledAtLabel } = params;
+  const subject = `Zust Talk Reminder: ${reminderText.slice(0, 60)}`;
+  const text = `Reminder (${scheduledAtLabel}): ${reminderText}`;
+  const html = buildOtpHtml("Zust Talk Reminder", `${scheduledAtLabel}<br/><br/>${reminderText}`, "⏰");
+
+  if (env.EMAIL_WEBHOOK_URL?.trim()) {
+    try {
+      return await sendViaWebhook(to, subject, text, html);
+    } catch {
+      return { mode: "failed" };
+    }
+  }
+  if (env.BREVO_API_KEY?.trim()) {
+    try {
+      return await sendViaBrevo(to, subject, text, html);
+    } catch {
+      return { mode: "failed" };
+    }
+  }
+  if (env.RESEND_API_KEY?.trim()) {
+    try {
+      return await sendViaResend(to, subject, text, html);
+    } catch {
+      return { mode: "failed" };
+    }
+  }
+  if (env.SMTP_USER && env.SMTP_PASS) {
+    try {
+      return await sendViaSmtp(to, subject, text, html);
+    } catch {
+      return { mode: "failed" };
+    }
+  }
+  return { mode: "console" };
+}

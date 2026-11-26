@@ -23,7 +23,8 @@ import { CallModal, ActiveCallState } from "./components/CallModal";
 import { GroupCallModal, ActiveGroupCallState } from "./components/GroupCallModal";
 import { NearbyRadarPage } from "./components/NearbyRadarPage";
 import { E2EEModal } from "./components/E2EEModal";
-import { MessageSquare, Plus, QrCode, Radar } from "lucide-react";
+import { AssistantPage } from "./components/AssistantPage";
+import { MessageSquare, Plus, QrCode, Radar, Bot } from "lucide-react";
 
 const CONV_CACHE_KEY = "zust_cached_conversations";
 
@@ -50,6 +51,7 @@ export const AppContent: React.FC = () => {
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [isAccountSecurityOpen, setIsAccountSecurityOpen] = useState(false);
   const [isRadarOpen, setIsRadarOpen] = useState(false);
+  const [isAssistantOpen, setIsAssistantOpen] = useState(false);
   const [radarInitialTab, setRadarInitialTab] = useState<"NEARBY" | "REQUESTS">("NEARBY");
   const [pendingRadarRequests, setPendingRadarRequests] = useState(0);
   const [activeCall, setActiveCall] = useState<ActiveCallState | null>(null);
@@ -91,6 +93,7 @@ export const AppContent: React.FC = () => {
   useBackLayer("invite-modal", 60, isInviteOpen, () => setIsInviteOpen(false));
   useBackLayer("account-security-modal", 60, isAccountSecurityOpen, () => setIsAccountSecurityOpen(false));
   useBackLayer("group-info-drawer", 50, isGroupInfoOpen, () => setIsGroupInfoOpen(false));
+  useBackLayer("assistant-page", 46, isAssistantOpen, () => setIsAssistantOpen(false));
   useBackLayer("nearby-radar", 45, isRadarOpen, () => setIsRadarOpen(false));
   useBackLayer("active-conversation", 40, Boolean(activeConversationId), () => {
     setActiveConversationId(null);
@@ -403,6 +406,52 @@ export const AppContent: React.FC = () => {
     socket.on("nearby:request-cancelled", refreshRadarBadge);
     socket.on("nearby:request-accepted", handleNearbyRequestAccepted);
 
+    const handleReminderDue = (data: { text?: string }) => {
+      playSoftNotificationTone();
+      showAppNotification({
+        title: "⏰ Zust Talk Reminder",
+        body: data?.text || "You have a scheduled reminder",
+        tag: `reminder-${Date.now()}`,
+      });
+    };
+
+    const handleScheduledExecuted = (job: any) => {
+      loadConversations();
+      if (job?.resultMessage) {
+        showAppNotification({
+          title: "Scheduled Action Update",
+          body: job.resultMessage,
+          tag: `sched-${job.id || Date.now()}`,
+        });
+      }
+    };
+
+    const handleScheduledCallDue = (data: {
+      targetUserId?: string;
+      conversationId?: string;
+      targetLabel?: string;
+      isVideo?: boolean;
+    }) => {
+      if (data?.targetUserId && data?.conversationId) {
+        setIsCallMinimized(false);
+        setActiveCall({
+          isActive: true,
+          isIncoming: false,
+          isVideo: Boolean(data.isVideo),
+          otherUser: {
+            id: data.targetUserId,
+            displayName: data.targetLabel,
+            username: data.targetLabel || "User",
+          },
+          conversationId: data.conversationId,
+        });
+      }
+    };
+
+    socket.on("ai:reminder-due", handleReminderDue);
+    socket.on("ai:scheduled-executed", handleScheduledExecuted);
+    socket.on("ai:scheduled-call-due", handleScheduledCallDue);
+
     return () => {
       socket.off("conversation:updated", handleConversationUpdated);
       socket.off("conversation:read", handleConversationRead);
@@ -414,6 +463,9 @@ export const AppContent: React.FC = () => {
       socket.off("nearby:request-received", handleNearbyRequestReceived);
       socket.off("nearby:request-cancelled", refreshRadarBadge);
       socket.off("nearby:request-accepted", handleNearbyRequestAccepted);
+      socket.off("ai:reminder-due", handleReminderDue);
+      socket.off("ai:scheduled-executed", handleScheduledExecuted);
+      socket.off("ai:scheduled-call-due", handleScheduledCallDue);
     };
   }, [socket, user, loadConversations]);
 
@@ -497,14 +549,15 @@ export const AppContent: React.FC = () => {
     <div className="fixed inset-0 h-dvh w-screen flex bg-slate-100 dark:bg-slate-950 overflow-hidden font-sans">
       <div
         className={`h-full min-h-0 overflow-hidden ${
-          activeConversationId || isRadarOpen ? "hidden md:flex" : "flex"
+          activeConversationId || isRadarOpen || isAssistantOpen ? "hidden md:flex" : "flex"
         } w-full md:w-auto`}
       >
         <Sidebar
           conversations={conversations}
-          activeId={isRadarOpen ? null : activeConversationId}
+          activeId={isRadarOpen || isAssistantOpen ? null : activeConversationId}
           onSelect={(id) => {
             setIsRadarOpen(false);
+            setIsAssistantOpen(false);
             setActiveConversationId(id);
             setIsGroupInfoOpen(false);
           }}
@@ -514,10 +567,17 @@ export const AppContent: React.FC = () => {
           onOpenSecurity={() => setIsAccountSecurityOpen(true)}
           onOpenRadar={() => {
             setRadarInitialTab("NEARBY");
+            setIsAssistantOpen(false);
             setIsRadarOpen(true);
             setIsGroupInfoOpen(false);
           }}
           isRadarActive={isRadarOpen}
+          onOpenAssistant={() => {
+            setIsRadarOpen(false);
+            setIsAssistantOpen(true);
+            setIsGroupInfoOpen(false);
+          }}
+          isAssistantActive={isAssistantOpen}
           pendingRadarRequests={pendingRadarRequests}
           onToggleArchive={handleToggleArchive}
           notificationPermission={notifPermission}
@@ -530,10 +590,36 @@ export const AppContent: React.FC = () => {
 
       <div
         className={`h-full min-h-0 min-w-0 flex-1 flex flex-col overflow-hidden ${
-          !activeConversationId && !isRadarOpen ? "hidden md:flex" : "flex"
+          !activeConversationId && !isRadarOpen && !isAssistantOpen ? "hidden md:flex" : "flex"
         }`}
       >
-        {isRadarOpen ? (
+        {isAssistantOpen ? (
+          <AssistantPage
+            onBack={() => setIsAssistantOpen(false)}
+            onConversationsChanged={loadConversations}
+            onOpenConversation={(convId) => {
+              setIsAssistantOpen(false);
+              loadConversations();
+              setActiveConversationId(convId);
+            }}
+            onStartCallWithUser={({ conversationId, otherUser, isVideo }) => {
+              setIsAssistantOpen(false);
+              setIsCallMinimized(false);
+              setActiveCall({
+                isActive: true,
+                isIncoming: false,
+                isVideo,
+                otherUser: {
+                  id: otherUser.id,
+                  displayName: otherUser.displayName,
+                  username: otherUser.username,
+                  avatarUrl: otherUser.avatarUrl || undefined,
+                },
+                conversationId,
+              });
+            }}
+          />
+        ) : isRadarOpen ? (
           <NearbyRadarPage
             initialTab={radarInitialTab}
             onBack={() => setIsRadarOpen(false)}
@@ -598,6 +684,17 @@ export const AppContent: React.FC = () => {
                 >
                   <Radar className="w-3.5 h-3.5" />
                   <span>Nearby Radar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsRadarOpen(false);
+                    setIsAssistantOpen(true);
+                  }}
+                  className="px-3.5 py-2 bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 shadow-sm transition-all"
+                >
+                  <Bot className="w-3.5 h-3.5" />
+                  <span>AI Assistant</span>
                 </button>
               </div>
             </div>

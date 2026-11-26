@@ -26,6 +26,7 @@ enum MessageType {
   DOCUMENT
   VOICE
   SYSTEM
+  POLL
 }
 
 enum ReportStatus {
@@ -39,6 +40,25 @@ enum ConnectionRequestStatus {
   PENDING
   ACCEPTED
   REJECTED
+}
+
+enum ScheduledActionType {
+  SEND_MESSAGE
+  REMINDER
+  CREATE_POLL
+  CALL
+}
+
+enum ScheduledActionStatus {
+  PENDING
+  EXECUTED
+  FAILED
+  CANCELLED
+}
+
+enum AssistantTaskStatus {
+  PENDING
+  COMPLETED
 }
 
 model User {
@@ -70,6 +90,10 @@ model User {
   nearbyPresence         NearbyPresence?
   connectionRequestsSent     ConnectionRequest[] @relation("ConnectionSender")
   connectionRequestsReceived ConnectionRequest[] @relation("ConnectionReceiver")
+  scheduledActions       ScheduledAction[]
+  assistantTasks         AssistantTask[]
+  assistantMessages      AssistantMessage[]
+  pollVotes              PollVote[]
 }
 
 model OtpChallenge {
@@ -117,6 +141,7 @@ model Conversation {
   updatedAt DateTime @updatedAt
   members   ConversationMember[]
   messages  Message[]
+  polls     Poll[]
 }
 
 model ConversationMember {
@@ -154,6 +179,7 @@ model Message {
   replies        Message[] @relation("MessageReplies")
   receipts       MessageReceipt[]
   attachments    Attachment[]
+  poll           Poll?
 
   @@index([conversationId, createdAt])
   @@index([senderId, createdAt])
@@ -234,4 +260,89 @@ model ConnectionRequest {
 
   @@unique([senderId, receiverId])
   @@index([receiverId, status])
+}
+
+model Poll {
+  id             String       @id @default(uuid())
+  conversationId String
+  messageId      String       @unique
+  creatorId      String
+  question       String
+  allowMultiple  Boolean      @default(false)
+  closedAt       DateTime?
+  createdAt      DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  message        Message      @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  options        PollOption[]
+
+  @@index([conversationId, createdAt])
+}
+
+model PollOption {
+  id       String     @id @default(uuid())
+  pollId   String
+  text     String
+  position Int        @default(0)
+  poll     Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  votes    PollVote[]
+
+  @@index([pollId, position])
+}
+
+model PollVote {
+  id        String     @id @default(uuid())
+  optionId  String
+  userId    String
+  createdAt DateTime   @default(now())
+  option    PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([optionId, userId])
+  @@index([userId])
+}
+
+model ScheduledAction {
+  id                   String                @id @default(uuid())
+  userId               String
+  type                 ScheduledActionType
+  status               ScheduledActionStatus @default(PENDING)
+  scheduledFor         DateTime
+  executedAt           DateTime?
+  targetUserId         String?
+  targetConversationId String?
+  targetLabel          String?
+  payload              Json
+  resultMessage        String?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  user                 User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledFor])
+  @@index([userId, status, scheduledFor])
+}
+
+model AssistantTask {
+  id        String              @id @default(uuid())
+  userId    String
+  title     String
+  dueAt     DateTime?
+  status    AssistantTaskStatus @default(PENDING)
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+}
+
+model AssistantMessage {
+  id        String   @id @default(uuid())
+  userId    String
+  role      String
+  content   String
+  language  String   @default("en")
+  metadata  Json?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
 }

@@ -39,6 +39,8 @@ import {
   Languages,
   Eye,
   Archive,
+  BarChart3,
+  Plus,
 } from "lucide-react";
 
 const QUICK_EMOJIS = [
@@ -112,6 +114,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   // Modals state
   const [isReportOpen, setIsReportOpen] = useState(false);
   const [isE2EEOpen, setIsE2EEOpen] = useState(false);
+  const [isPollModalOpen, setIsPollModalOpen] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState("");
+  const [pollOptions, setPollOptions] = useState<string[]>(["", ""]);
+  const [pollSubmitting, setPollSubmitting] = useState(false);
 
   // Voice recording state
   const [isRecording, setIsRecording] = useState(false);
@@ -132,6 +138,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   // Back Button handlers
   useBackLayer("chat-camera", 105, isCameraOpen, () => setIsCameraOpen(false));
+  useBackLayer("chat-poll", 90, isPollModalOpen, () => setIsPollModalOpen(false));
   useBackLayer("chat-viewonce", 102, Boolean(viewOnceUrl), () => setViewOnceUrl(null));
   useBackLayer("chat-lightbox", 100, Boolean(previewImageUrl), () => setPreviewImageUrl(null));
   useBackLayer("chat-menu", 80, menuOpen, () => setMenuOpen(false));
@@ -559,11 +566,28 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       }
     };
 
+    const handlePollUpdated = ({
+      conversationId: cId,
+      messageId,
+      poll,
+    }: {
+      conversationId: string;
+      messageId: string;
+      poll: NonNullable<Message["poll"]>;
+    }) => {
+      if (cId === conversation.id) {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === messageId ? { ...m, poll } : m))
+        );
+      }
+    };
+
     socket.on("message:new", handleNewMessage);
     socket.on("message:updated", handleUpdatedMessage);
     socket.on("message:deleted", handleDeletedMessage);
     socket.on("message:receipt", handleReceipt);
     socket.on("conversation:read", handleConversationRead);
+    socket.on("poll:updated", handlePollUpdated);
     socket.on("typing:start", handleTypingStart);
     socket.on("typing:stop", handleTypingStop);
 
@@ -574,6 +598,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       socket.off("message:deleted", handleDeletedMessage);
       socket.off("message:receipt", handleReceipt);
       socket.off("conversation:read", handleConversationRead);
+      socket.off("poll:updated", handlePollUpdated);
       socket.off("typing:start", handleTypingStart);
       socket.off("typing:stop", handleTypingStop);
     };
@@ -995,6 +1020,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   type="button"
                   onClick={() => {
                     setMenuOpen(false);
+                    setIsPollModalOpen(true);
+                  }}
+                  className="w-full px-4 py-2 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center space-x-2"
+                >
+                  <BarChart3 className="w-4 h-4 text-emerald-600" />
+                  <span>Create Poll</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
                     setIsE2EEOpen(true);
                   }}
                   className="w-full px-4 py-2 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center space-x-2"
@@ -1134,6 +1171,71 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     <p className={`italic text-xs ${isMe ? "text-emerald-100" : "text-slate-400"}`}>
                       This message was deleted
                     </p>
+                  ) : m.type === "POLL" && m.poll ? (
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="min-w-[210px] sm:min-w-[260px] space-y-2 py-0.5"
+                    >
+                      <div className="flex items-center space-x-1.5 text-[11px] font-bold uppercase tracking-wide opacity-80">
+                        <BarChart3 className="w-3.5 h-3.5" />
+                        <span>Poll</span>
+                      </div>
+                      <p className="font-bold text-sm leading-snug">{m.poll.question}</p>
+                      <div className="space-y-1.5 pt-1">
+                        {(() => {
+                          const totalVotes = m.poll.options.reduce((sum, o) => sum + (o.votes?.length || 0), 0);
+                          return m.poll.options.map((opt) => {
+                            const votesCount = opt.votes?.length || 0;
+                            const pct = totalVotes > 0 ? Math.round((votesCount / totalVotes) * 100) : 0;
+                            const votedByMe = opt.votes?.some((v) => v.userId === user?.id);
+                            return (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    const res = await api.polls.vote(m.poll!.id, opt.id);
+                                    if (res?.poll) {
+                                      setMessages((prev) =>
+                                        prev.map((item) => (item.id === m.id ? { ...item, poll: res.poll } : item))
+                                      );
+                                    }
+                                  } catch {}
+                                }}
+                                className={`relative w-full overflow-hidden rounded-xl border px-3 py-2 text-left text-xs transition-all ${
+                                  isMe
+                                    ? votedByMe
+                                      ? "border-white bg-white/20 font-bold text-white"
+                                      : "border-white/30 bg-black/15 hover:bg-black/25 text-white"
+                                    : votedByMe
+                                    ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/50 font-bold text-emerald-700 dark:text-emerald-300"
+                                    : "border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/60 hover:border-emerald-400"
+                                }`}
+                              >
+                                <div
+                                  className={`absolute inset-y-0 left-0 transition-all duration-300 ${
+                                    isMe ? "bg-white/20" : "bg-emerald-500/15"
+                                  }`}
+                                  style={{ width: `${pct}%` }}
+                                />
+                                <div className="relative z-10 flex items-center justify-between gap-2">
+                                  <span className="truncate">
+                                    {votedByMe ? "✓ " : ""}
+                                    {opt.text}
+                                  </span>
+                                  <span className="text-[10px] font-bold shrink-0 opacity-90">
+                                    {votesCount} ({pct}%)
+                                  </span>
+                                </div>
+                              </button>
+                            );
+                          });
+                        })()}
+                      </div>
+                      <p className="text-[10px] opacity-75">
+                        {m.poll.options.reduce((sum, o) => sum + (o.votes?.length || 0), 0)} total votes • Tap to vote
+                      </p>
+                    </div>
                   ) : isViewOnce ? (
                     /* One-View Protected Photo Bubble */
                     <button
@@ -1740,6 +1842,111 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       )}
 
       <E2EEModal isOpen={isE2EEOpen} onClose={() => setIsE2EEOpen(false)} peerName={title} />
+
+      {isPollModalOpen && (
+        <div
+          onClick={() => setIsPollModalOpen(false)}
+          className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn"
+        >
+          <form
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={async (e) => {
+              e.preventDefault();
+              const cleanOpts = pollOptions.map((o) => o.trim()).filter(Boolean);
+              if (!pollQuestion.trim() || cleanOpts.length < 2) {
+                showNotice("Enter a question and at least 2 options.");
+                return;
+              }
+              try {
+                setPollSubmitting(true);
+                const res = await api.polls.create({
+                  conversationId: conversation.id,
+                  question: pollQuestion.trim(),
+                  options: cleanOpts,
+                });
+                if (res?.message) {
+                  setMessages((prev) =>
+                    prev.some((m) => m.id === res.message.id) ? prev : [...prev, res.message]
+                  );
+                }
+                setPollQuestion("");
+                setPollOptions(["", ""]);
+                setIsPollModalOpen(false);
+                onConversationUpdated();
+              } catch (err: any) {
+                showNotice(err.message || "Failed to create poll.");
+              } finally {
+                setPollSubmitting(false);
+              }
+            }}
+            className="bg-white dark:bg-slate-900 rounded-3xl p-5 w-full max-w-sm border border-slate-200 dark:border-slate-800 shadow-2xl space-y-3"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-1.5">
+                <BarChart3 className="w-4 h-4 text-emerald-600" />
+                <span>Create Poll</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsPollModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <input
+              type="text"
+              value={pollQuestion}
+              onChange={(e) => setPollQuestion(e.target.value)}
+              placeholder="Ask a question..."
+              required
+              className="w-full px-3.5 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            />
+            <div className="space-y-2 max-h-44 overflow-y-auto">
+              {pollOptions.map((opt, idx) => (
+                <input
+                  key={idx}
+                  type="text"
+                  value={opt}
+                  onChange={(e) => {
+                    const next = [...pollOptions];
+                    next[idx] = e.target.value;
+                    setPollOptions(next);
+                  }}
+                  placeholder={`Option ${idx + 1}`}
+                  className="w-full px-3 py-1.5 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100"
+                />
+              ))}
+            </div>
+            {pollOptions.length < 6 && (
+              <button
+                type="button"
+                onClick={() => setPollOptions((prev) => [...prev, ""])}
+                className="text-xs font-semibold text-emerald-600 flex items-center space-x-1"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Option</span>
+              </button>
+            )}
+            <div className="flex justify-end space-x-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setIsPollModalOpen(false)}
+                className="px-3.5 py-1.5 text-xs rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={pollSubmitting}
+                className="px-4 py-1.5 text-xs rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold disabled:opacity-50"
+              >
+                {pollSubmitting ? "Posting..." : "Post Poll"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       <ForwardModal
         isOpen={Boolean(forwardingMsg)}

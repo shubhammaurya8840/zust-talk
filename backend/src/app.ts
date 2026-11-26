@@ -11,6 +11,8 @@ import uploadRoutes from "./modules/uploads/uploads.routes";
 import reportRoutes from "./modules/reports/reports.routes";
 import translateRoutes from "./modules/translate/translate.routes";
 import nearbyRoutes from "./modules/nearby/nearby.routes";
+import pollRoutes from "./modules/polls/polls.routes";
+import aiRoutes from "./modules/ai/ai.routes";
 import { notFound, errorHandler } from "./middleware/error";
 import { env } from "./config/env";
 
@@ -38,6 +40,8 @@ app.use("/api/uploads", uploadRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/translate", translateRoutes);
 app.use("/api/nearby", nearbyRoutes);
+app.use("/api/polls", pollRoutes);
+app.use("/api/ai", aiRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

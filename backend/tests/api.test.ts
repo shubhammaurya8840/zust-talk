@@ -3,6 +3,7 @@ import http from "node:http";
 import { AddressInfo } from "node:net";
 import app from "../src/app";
 import { prisma } from "../src/config/prisma";
+import { executeScheduledJob } from "../src/modules/ai/scheduler.worker";
 
 let server: http.Server;
 let baseUrl: string;
@@ -796,5 +797,148 @@ describe("India Chat Backend API Tests", () => {
       method: "POST",
       headers: { Authorization: `Bearer ${user2Token}` }
     });
+  });
+
+  it("14. Personal AI Assistant & Interactive Polls - Voice/Text NLU, Confirm, Schedule, Tasks, Summary & Polls", async () => {
+    // 1. Direct Poll Creation + Voting
+    const pollRes = await fetch(`${baseUrl}/api/polls`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        conversationId: groupConvId,
+        question: "Cricket match time?",
+        options: ["7:00 AM", "5:00 PM"],
+      }),
+    });
+    expect(pollRes.status).toBe(201);
+    const pollData = await pollRes.json();
+    expect(pollData.poll.options.length).toBe(2);
+
+    const voteRes = await fetch(`${baseUrl}/api/polls/${pollData.poll.id}/vote`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user2Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ optionId: pollData.poll.options[0].id }),
+    });
+    expect(voteRes.status).toBe(200);
+    expect((await voteRes.json()).poll.options[0].votes.length).toBe(1);
+
+    // 2. Hinglish AI Command -> Confirmation Card -> Confirm & Idempotent Check
+    const cmdWish = await fetch(`${baseUrl}/api/ai/command`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "testuser2 ko happy birthday wish kar do" }),
+    });
+    expect(cmdWish.status).toBe(200);
+    const wishData = await cmdWish.json();
+    const pendingCard = wishData.assistantMessage.metadata?.pendingAction;
+    expect(pendingCard).toBeDefined();
+    expect(pendingCard.type).toBe("SEND_MESSAGE");
+    expect(pendingCard.body).toContain("Happy Birthday");
+
+    const confirmWish = await fetch(`${baseUrl}/api/ai/confirm`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ messageId: wishData.assistantMessage.id }),
+    });
+    expect(confirmWish.status).toBe(200);
+    expect((await confirmWish.json()).success).toBe(true);
+
+    // Second confirm must NOT duplicate send
+    const dupConfirm = await fetch(`${baseUrl}/api/ai/confirm`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ messageId: wishData.assistantMessage.id }),
+    });
+    expect((await dupConfirm.json()).alreadyHandled).toBe(true);
+
+    // 3. Scheduled message + background worker execution + Tasks + Reminder + Summaries
+    const schedCmd = await fetch(`${baseUrl}/api/ai/command`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: "Kal 12 baje testuser2 ko scheduled hello bhej dena",
+        tzOffsetMinutes: -330,
+      }),
+    });
+    expect(schedCmd.status).toBe(200);
+    const schedCmdData = await schedCmd.json();
+    expect(schedCmdData.assistantMessage.metadata?.pendingAction?.type).toBe("SCHEDULE_MESSAGE");
+
+    // Confirm schedule with an immediate due date so worker executes it directly
+    const confirmSched = await fetch(`${baseUrl}/api/ai/confirm`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messageId: schedCmdData.assistantMessage.id,
+        overrides: { scheduledForIso: new Date(Date.now() - 1000).toISOString() },
+      }),
+    });
+    expect(confirmSched.status).toBe(200);
+    const schedList = (await confirmSched.json()).state.scheduledActions;
+    const createdJob = schedList.find((s: any) => s.status === "PENDING");
+    expect(createdJob).toBeDefined();
+
+    const executed = await executeScheduledJob(createdJob.id);
+    expect(executed?.status).toBe("EXECUTED");
+
+    // 4. Reminder + Edit + Cancel
+    const remCmd = await fetch(`${baseUrl}/api/ai/command`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "Mujhe kal subah 9 baje yaad dila dena", tzOffsetMinutes: -330 }),
+    });
+    const remData = await remCmd.json();
+    expect(remData.assistantMessage.metadata?.pendingAction?.type).toBe("SET_REMINDER");
+    const confirmRem = await fetch(`${baseUrl}/api/ai/confirm`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ messageId: remData.assistantMessage.id }),
+    });
+    const remState = (await confirmRem.json()).state;
+    const remJob = remState.scheduledActions.find((s: any) => s.type === "REMINDER" && s.status === "PENDING");
+    expect(remJob).toBeDefined();
+
+    const patchRem = await fetch(`${baseUrl}/api/ai/scheduled/${remJob.id}`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "Call Doctor" }),
+    });
+    expect(patchRem.status).toBe(200);
+
+    const cancelRem = await fetch(`${baseUrl}/api/ai/scheduled/${remJob.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${user1Token}` },
+    });
+    expect(cancelRem.status).toBe(200);
+
+    // 5. Task creation & completion + Unread summary + Chat Search/Summary
+    const taskCmd = await fetch(`${baseUrl}/api/ai/command`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "Add task buy fruits" }),
+    });
+    expect(taskCmd.status).toBe(200);
+    expect((await taskCmd.json()).state.tasks.some((t: any) => t.title.toLowerCase().includes("fruits"))).toBe(true);
+
+    const unreadCmd = await fetch(`${baseUrl}/api/ai/command`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user2Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "Mere unread messages ka summary batao" }),
+    });
+    expect(unreadCmd.status).toBe(200);
+    expect((await unreadCmd.json()).assistantMessage.content.length).toBeGreaterThan(5);
+
+    const summaryCmd = await fetch(`${baseUrl}/api/ai/command`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "testuser2 ke saath last conversation dikhao" }),
+    });
+    expect(summaryCmd.status).toBe(200);
+    expect((await summaryCmd.json()).assistantMessage.metadata?.conversationLink?.conversationId).toBeDefined();
+
+    // Clean up test assistant records for clean shared DB
+    await prisma.scheduledAction.deleteMany({ where: { userId: { in: [user1Id, user2Id] } } });
+    await prisma.assistantTask.deleteMany({ where: { userId: { in: [user1Id, user2Id] } } });
+    await prisma.assistantMessage.deleteMany({ where: { userId: { in: [user1Id, user2Id] } } });
   });
 });

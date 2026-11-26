@@ -1,4 +1,16 @@
-import { User, Conversation, Message, NearbyUser, ConnectionRequestItem, SocialLinks } from "../types";
+import {
+  User,
+  Conversation,
+  Message,
+  NearbyUser,
+  ConnectionRequestItem,
+  SocialLinks,
+  PollData,
+  AssistantState,
+  AssistantMessage,
+  ScheduledAction,
+  AssistantTask,
+} from "../types";
 
 const TOKEN_KEY = "india_chat_access_token";
 const REFRESH_KEY = "india_chat_refresh_token";
@@ -471,6 +483,100 @@ export const api = {
 
     cancelRequest: (requestId: string) =>
       request<{ success: boolean }>(`/api/nearby/requests/${requestId}`, {
+        method: "DELETE",
+      }),
+  },
+
+  polls: {
+    create: (payload: { conversationId: string; question: string; options: string[]; allowMultiple?: boolean }) =>
+      request<{ success: boolean; message: Message; poll: PollData }>("/api/polls", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+
+    vote: (pollId: string, optionId: string) =>
+      request<{ success: boolean; poll: PollData }>(`/api/polls/${pollId}/vote`, {
+        method: "POST",
+        body: JSON.stringify({ optionId }),
+      }),
+  },
+
+  ai: {
+    getState: () => request<{ success: boolean } & AssistantState>("/api/ai/state"),
+
+    clearHistory: () =>
+      request<{ success: boolean } & AssistantState>("/api/ai/history", {
+        method: "DELETE",
+      }),
+
+    sendCommand: (text: string) =>
+      request<{
+        success: boolean;
+        userMessage: AssistantMessage;
+        assistantMessage: AssistantMessage;
+        callTrigger?: {
+          conversationId: string;
+          otherUser: { id: string; username: string; displayName: string; avatarUrl?: string | null };
+          isVideo: boolean;
+        };
+        createdConversationId?: string;
+        state: AssistantState;
+      }>("/api/ai/command", {
+        method: "POST",
+        body: JSON.stringify({
+          text,
+          tzOffsetMinutes: new Date().getTimezoneOffset(),
+        }),
+      }),
+
+    confirmAction: (messageId: string, overrides?: Record<string, any>) =>
+      request<{
+        success: boolean;
+        alreadyHandled?: boolean;
+        message: string;
+        callTrigger?: {
+          conversationId: string;
+          otherUser: { id: string; username: string; displayName: string; avatarUrl?: string | null };
+          isVideo: boolean;
+        };
+        createdConversationId?: string;
+        state: AssistantState;
+      }>("/api/ai/confirm", {
+        method: "POST",
+        body: JSON.stringify({ messageId, overrides }),
+      }),
+
+    cancelAction: (messageId: string) =>
+      request<{ success: boolean; state: AssistantState }>("/api/ai/cancel", {
+        method: "POST",
+        body: JSON.stringify({ messageId }),
+      }),
+
+    updateScheduled: (id: string, data: { scheduledFor?: string; text?: string }) =>
+      request<{ success: boolean; scheduledAction: ScheduledAction }>(`/api/ai/scheduled/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+
+    deleteScheduled: (id: string) =>
+      request<{ success: boolean; scheduledAction?: ScheduledAction }>(`/api/ai/scheduled/${id}`, {
+        method: "DELETE",
+      }),
+
+    createTask: (title: string, dueAt?: string) =>
+      request<{ success: boolean; task: AssistantTask }>("/api/ai/tasks", {
+        method: "POST",
+        body: JSON.stringify({ title, dueAt }),
+      }),
+
+    updateTask: (id: string, data: { title?: string; status?: "PENDING" | "COMPLETED" }) =>
+      request<{ success: boolean; task: AssistantTask }>(`/api/ai/tasks/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+
+    deleteTask: (id: string) =>
+      request<{ success: boolean }>(`/api/ai/tasks/${id}`, {
         method: "DELETE",
       }),
   },

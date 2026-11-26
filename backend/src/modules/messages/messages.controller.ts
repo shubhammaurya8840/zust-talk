@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { prisma } from "../../config/prisma";
 import { HttpError } from "../../utils/http-error";
 import { io } from "../../sockets/socket";
+import { pollInclude } from "../polls/polls.controller";
 
 async function ensureMember(conversationId: string, userId: string) {
   const member = await prisma.conversationMember.findUnique({ where: { conversationId_userId: { conversationId, userId } } });
@@ -31,7 +32,7 @@ export async function history(req: Request, res: Response) {
     take: limit,
     ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
     orderBy: { createdAt: "desc" },
-    include: { sender: { select: { id: true, username: true, displayName: true, avatarUrl: true } }, receipts: true, attachments: true }
+    include: { sender: { select: { id: true, username: true, displayName: true, avatarUrl: true } }, receipts: true, attachments: true, poll: { include: pollInclude } }
   });
   const hasMore = messages.length === limit;
   const nextCursor = hasMore ? messages[messages.length - 1].id : null;
@@ -87,7 +88,7 @@ export async function send(req: Request, res: Response) {
           .map(m => ({ userId: m.userId }))
       }
     },
-    include: { sender: { select: { id: true, username: true, displayName: true, avatarUrl: true } }, receipts: true, attachments: true }
+    include: { sender: { select: { id: true, username: true, displayName: true, avatarUrl: true } }, receipts: true, attachments: true, poll: { include: pollInclude } }
   });
 
   if (io) {
@@ -131,7 +132,7 @@ export async function openViewOnce(req: Request, res: Response) {
 
   const updated = await prisma.message.findUnique({
     where: { id: messageId },
-    include: { sender: { select: { id: true, username: true, displayName: true, avatarUrl: true } }, receipts: true, attachments: true }
+    include: { sender: { select: { id: true, username: true, displayName: true, avatarUrl: true } }, receipts: true, attachments: true, poll: { include: pollInclude } }
   });
 
   if (io && updated) {
