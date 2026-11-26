@@ -236,5 +236,6 @@ export interface AssistantState {
   aiConfig?: {
     configured: boolean;
     provider: string;
+    lastError?: string;
   };
 }

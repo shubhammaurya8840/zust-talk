@@ -73,6 +73,7 @@ export const AssistantPage: React.FC<AssistantPageProps> = ({
   const [scheduled, setScheduled] = useState<ScheduledAction[]>([]);
   const [recentConvs, setRecentConvs] = useState<AssistantRecentConversation[]>([]);
   const [aiProvider, setAiProvider] = useState<string>("Zust Smart AI");
+  const [aiLastError, setAiLastError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const [inputText, setInputText] = useState("");
@@ -123,13 +124,14 @@ export const AssistantPage: React.FC<AssistantPageProps> = ({
     tasks: AssistantTask[];
     scheduledActions: ScheduledAction[];
     recentConversations: AssistantRecentConversation[];
-    aiConfig?: { configured: boolean; provider: string };
+    aiConfig?: { configured: boolean; provider: string; lastError?: string };
   }) => {
     setMessages(s.messages || []);
     setTasks(s.tasks || []);
     setScheduled(s.scheduledActions || []);
     setRecentConvs(s.recentConversations || []);
     if (s.aiConfig?.provider) setAiProvider(s.aiConfig.provider);
+    setAiLastError(s.aiConfig?.lastError || null);
   };
 
   const loadState = useCallback(async () => {
@@ -329,8 +331,17 @@ export const AssistantPage: React.FC<AssistantPageProps> = ({
             <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100 truncate">
               Zust AI
             </h2>
-            <p className="text-[11px] text-emerald-600 dark:text-emerald-400 truncate font-medium">
-              {aiProvider} • Ask anything or automate chats
+            <p
+              title={aiLastError || undefined}
+              className={`text-[11px] truncate font-medium ${
+                aiLastError
+                  ? "text-amber-600 dark:text-amber-400"
+                  : "text-emerald-600 dark:text-emerald-400"
+              }`}
+            >
+              {aiLastError
+                ? `${aiProvider} issue: ${aiLastError}`
+                : `${aiProvider} • Ask anything or automate chats`}
             </p>
           </div>
         </div>

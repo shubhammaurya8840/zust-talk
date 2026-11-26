@@ -44,17 +44,277 @@ export interface BrainResponse {
   action: BrainAction;
 }
 
-export function getConfiguredAiProvider(): { configured: boolean; provider: string } {
-  if (env.GROQ_API_KEY?.trim()) return { configured: true, provider: "Groq Llama" };
-  if (env.GEMINI_API_KEY?.trim()) return { configured: true, provider: "Google Gemini" };
-  if (env.OPENROUTER_API_KEY?.trim()) return { configured: true, provider: "OpenRouter" };
-  if (env.OPENAI_API_KEY?.trim()) return { configured: true, provider: "OpenAI" };
-  if (env.POLLINATIONS_API_KEY?.trim()) return { configured: true, provider: "Pollinations AI" };
-  return { configured: false, provider: "Zust Smart AI" };
+const VALID_ACTION_TYPES = new Set<BrainAction["type"]>([
+  "CONFIRM_PENDING",
+  "CANCEL_PENDING",
+  "SEND_MESSAGE",
+  "SCHEDULE_MESSAGE",
+  "START_CALL",
+  "CREATE_GROUP",
+  "CREATE_POLL",
+  "SET_REMINDER",
+  "TASK_CREATE",
+  "TASK_LIST",
+  "TASK_COMPLETE",
+  "UNREAD_SUMMARY",
+  "LAST_CONVERSATION",
+  "SUMMARIZE_CHAT",
+  "SEARCH_CHATS",
+  "SCHEDULED_LIST",
+  "SCHEDULED_CANCEL",
+  "NONE",
+]);
+
+let lastLlmDiagnostic: { error?: string; updatedAt?: number } = {};
+
+export function cleanEnvKey(raw?: string): string {
+  if (!raw) return "";
+  return raw.trim().replace(/^["']+|["']+$/g, "").trim();
+}
+
+function getGeminiKey(): string {
+  return cleanEnvKey(env.GEMINI_API_KEY) || cleanEnvKey(env.GOOGLE_API_KEY);
+}
+
+export function getConfiguredAiProvider(): { configured: boolean; provider: string; lastError?: string } {
+  let provider = "Zust Smart AI";
+  let configured = false;
+
+  if (cleanEnvKey(env.GROQ_API_KEY)) {
+    configured = true;
+    provider = "Groq Llama";
+  } else if (getGeminiKey()) {
+    configured = true;
+    provider = "Google Gemini";
+  } else if (cleanEnvKey(env.OPENROUTER_API_KEY)) {
+    configured = true;
+    provider = "OpenRouter";
+  } else if (cleanEnvKey(env.OPENAI_API_KEY)) {
+    configured = true;
+    provider = "OpenAI";
+  } else if (cleanEnvKey(env.POLLINATIONS_API_KEY)) {
+    configured = true;
+    provider = "Pollinations AI";
+  }
+
+  const recentError =
+    configured &&
+    lastLlmDiagnostic.error &&
+    lastLlmDiagnostic.updatedAt &&
+    Date.now() - lastLlmDiagnostic.updatedAt < 15 * 60_000
+      ? lastLlmDiagnostic.error
+      : undefined;
+
+  return { configured, provider, ...(recentError ? { lastError: recentError } : {}) };
 }
 
 function stripJsonFences(raw: string): string {
-  return raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  return raw
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+}
+
+export function buildChatMessages(
+  systemPrompt: string,
+  history: Array<{ role: string; content: string }>,
+  currentText: string
+): Array<{ role: "system" | "user" | "assistant"; content: string }> {
+  const turns: Array<{ role: "user" | "assistant"; content: string }> = [];
+  for (const m of history.slice(-8)) {
+    const content = String(m.content || "").trim().slice(0, 600);
+    if (!content) continue;
+    const role: "user" | "assistant" = m.role === "assistant" ? "assistant" : "user";
+    if (turns.length > 0 && turns[turns.length - 1].role === role) {
+      turns[turns.length - 1].content += `\n${content}`;
+    } else {
+      turns.push({ role, content });
+    }
+  }
+  const cleanCurrent = currentText.trim();
+  if (turns.length > 0 && turns[turns.length - 1].role === "user") {
+    turns[turns.length - 1].content += `\n${cleanCurrent}`;
+  } else {
+    turns.push({ role: "user", content: cleanCurrent });
+  }
+  return [{ role: "system", content: systemPrompt }, ...turns];
+}
+
+export function buildAlternatingGeminiContents(
+  history: Array<{ role: string; content: string }>,
+  currentText: string
+): Array<{ role: "user" | "model"; parts: Array<{ text: string }> }> {
+  const normalized: Array<{ role: "user" | "model"; text: string }> = [];
+  for (const m of history.slice(-8)) {
+    const content = String(m.content || "").trim().slice(0, 600);
+    if (!content) continue;
+    const role: "user" | "model" = m.role === "assistant" ? "model" : "user";
+    if (normalized.length === 0 && role === "model") continue;
+    if (normalized.length > 0 && normalized[normalized.length - 1].role === role) {
+      normalized[normalized.length - 1].text += `\n${content}`;
+    } else {
+      normalized.push({ role, text: content });
+    }
+  }
+  const cleanCurrent = currentText.trim();
+  if (normalized.length > 0 && normalized[normalized.length - 1].role === "user") {
+    normalized[normalized.length - 1].text += `\n${cleanCurrent}`;
+  } else {
+    normalized.push({ role: "user", text: cleanCurrent });
+  }
+  return normalized.map((t) => ({ role: t.role, parts: [{ text: t.text }] }));
+}
+
+export function parseLlmOutputText(rawText: string): { reply: string; action: Record<string, any> } | null {
+  const cleaned = stripJsonFences(rawText);
+  if (!cleaned) return null;
+
+  const tryParse = (candidate: string): Record<string, any> | null => {
+    try {
+      const obj = JSON.parse(candidate);
+      if (obj && typeof obj === "object" && !Array.isArray(obj)) return obj as Record<string, any>;
+    } catch {}
+    return null;
+  };
+
+  let parsed = tryParse(cleaned);
+  if (!parsed) {
+    const firstBrace = cleaned.indexOf("{");
+    const lastBrace = cleaned.lastIndexOf("}");
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      parsed = tryParse(cleaned.slice(firstBrace, lastBrace + 1));
+    }
+  }
+
+  if (parsed && (typeof parsed.reply === "string" || typeof parsed.action === "object")) {
+    const rawAct = (parsed.action && typeof parsed.action === "object" ? parsed.action : {}) as Record<string, any>;
+    const rawType = String(rawAct.type || "NONE").toUpperCase() as BrainAction["type"];
+    const safeType: BrainAction["type"] = VALID_ACTION_TYPES.has(rawType) ? rawType : "NONE";
+    return {
+      reply: String(parsed.reply || "").trim(),
+      action: { ...rawAct, type: safeType },
+    };
+  }
+
+  // LLM answered cleanly in natural prose instead of strict JSON — preserve the reply instead of discarding!
+  return {
+    reply: cleaned,
+    action: { type: "NONE" },
+  };
+}
+
+function summarizeHttpError(providerLabel: string, status: number, bodyText: string): string {
+  let msg = "";
+  try {
+    const j = JSON.parse(bodyText);
+    msg = String(j?.error?.message || j?.message || "");
+  } catch {}
+  if (!msg) msg = bodyText.replace(/\s+/g, " ").trim();
+  // Never reflect keys/tokens
+  msg = msg.replace(/(gsk_|AIza|sk-[a-zA-Z0-9_-]{8,})[a-zA-Z0-9_-]*/g, "[REDACTED]").slice(0, 100);
+  return `${providerLabel} HTTP ${status}${msg ? `: ${msg}` : ""}`;
+}
+
+async function callOpenAiCompatibleProvider(params: {
+  providerLabel: string;
+  endpoint: string;
+  apiKey: string;
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+  attempts: Array<{ model: string; jsonMode: boolean }>;
+  errors: string[];
+}): Promise<string> {
+  const { providerLabel, endpoint, apiKey, messages, attempts, errors } = params;
+  for (const attempt of attempts) {
+    try {
+      const body: Record<string, any> = {
+        model: attempt.model,
+        temperature: 0.4,
+        messages,
+      };
+      if (attempt.jsonMode) {
+        body.response_format = { type: "json_object" };
+      }
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as any;
+        const text = String(data?.choices?.[0]?.message?.content || "").trim();
+        if (text) return text;
+        errors.push(`${providerLabel} (${attempt.model}) empty response`);
+        continue;
+      }
+      const errBody = await res.text().catch(() => "");
+      const summary = summarizeHttpError(providerLabel, res.status, errBody);
+      errors.push(summary);
+      if (res.status === 401 || res.status === 403) break;
+    } catch (err: any) {
+      errors.push(`${providerLabel}: ${err?.name === "TimeoutError" ? "Timeout" : err?.message || "Network error"}`);
+    }
+  }
+  return "";
+}
+
+async function callGeminiProvider(params: {
+  apiKey: string;
+  systemPrompt: string;
+  contents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }>;
+  errors: string[];
+}): Promise<string> {
+  const { apiKey, systemPrompt, contents, errors } = params;
+  const attempts = [
+    { model: "gemini-2.5-flash", jsonMode: true },
+    { model: "gemini-2.0-flash", jsonMode: true },
+    { model: "gemini-2.5-flash-lite", jsonMode: true },
+    { model: "gemini-2.0-flash", jsonMode: false },
+  ];
+  for (const attempt of attempts) {
+    try {
+      const generationConfig: Record<string, any> = { temperature: 0.4 };
+      if (attempt.jsonMode) generationConfig.responseMimeType = "application/json";
+
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${attempt.model}:generateContent`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey,
+          },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            contents,
+            generationConfig,
+          }),
+          signal: AbortSignal.timeout(10_000),
+        }
+      );
+      if (res.ok) {
+        const data = (await res.json()) as any;
+        const text = String(data?.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
+        if (text) return text;
+        const finishReason = data?.candidates?.[0]?.finishReason || data?.promptFeedback?.blockReason;
+        errors.push(`Google Gemini (${attempt.model}) empty (${finishReason || "no text"})`);
+        continue;
+      }
+      const errBody = await res.text().catch(() => "");
+      const summary = summarizeHttpError("Google Gemini", res.status, errBody);
+      errors.push(summary);
+      if (res.status === 401 || res.status === 403 || /API_KEY_INVALID|API key not valid/i.test(errBody)) {
+        break;
+      }
+    } catch (err: any) {
+      errors.push(`Google Gemini: ${err?.name === "TimeoutError" ? "Timeout" : err?.message || "Network error"}`);
+    }
+  }
+  return "";
 }
 
 async function callFullLlmBrain(params: {
@@ -67,8 +327,8 @@ async function callFullLlmBrain(params: {
   tzOffsetMinutes: number;
 }): Promise<{ reply: string; action: BrainAction; providerName: string } | null> {
   const { text, userName, contacts, groups, history, pendingSummary, tzOffsetMinutes } = params;
-  const { provider } = getConfiguredAiProvider();
-  if (!getConfiguredAiProvider().configured) return null;
+  const aiStatus = getConfiguredAiProvider();
+  if (!aiStatus.configured) return null;
 
   const localNow = new Date(Date.now() - tzOffsetMinutes * 60_000).toISOString().replace("T", " ").slice(0, 19);
 
@@ -107,117 +367,91 @@ Rules:
 - If user says "write a poem/wish and send to Rahul" -> craft the actual poem/wish cleanly into action.messageBody and set action.type = "SEND_MESSAGE"!
 - Never execute a call or send silently — let the confirmation card appear cleanly unless Pending exists and user confirmed ("yes", "haan", "kar do").`;
 
-  const chatMessages = [
-    { role: "system", content: systemPrompt },
-    ...history.slice(-8).map((m) => ({
-      role: m.role === "assistant" ? "assistant" : "user",
-      content: m.content.slice(0, 600),
-    })),
-    { role: "user", content: text },
-  ];
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 9500);
+  const chatMessages = buildChatMessages(systemPrompt, history, text);
+  const errors: string[] = [];
+  let rawText = "";
+  let activeProvider = aiStatus.provider;
 
   try {
-    let rawJsonText = "";
-
-    if (env.GROQ_API_KEY?.trim()) {
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${env.GROQ_API_KEY.trim()}`,
-        },
-        body: JSON.stringify({
-          model: "llama-3.3-70b-versatile",
-          temperature: 0.4,
-          response_format: { type: "json_object" },
-          messages: chatMessages,
-        }),
-        signal: controller.signal,
+    const groqKey = cleanEnvKey(env.GROQ_API_KEY);
+    if (!rawText && groqKey) {
+      rawText = await callOpenAiCompatibleProvider({
+        providerLabel: "Groq Llama",
+        endpoint: "https://api.groq.com/openai/v1/chat/completions",
+        apiKey: groqKey,
+        messages: chatMessages,
+        attempts: [
+          { model: "llama-3.3-70b-versatile", jsonMode: true },
+          { model: "llama-3.3-70b-versatile", jsonMode: false },
+          { model: "llama-3.1-8b-instant", jsonMode: true },
+          { model: "llama-3.1-8b-instant", jsonMode: false },
+        ],
+        errors,
       });
-      if (res.ok) {
-        const data = (await res.json()) as any;
-        rawJsonText = data?.choices?.[0]?.message?.content || "";
-      }
+      if (rawText) activeProvider = "Groq Llama";
     }
 
-    if (!rawJsonText && env.GEMINI_API_KEY?.trim()) {
-      const geminiContents = [
-        ...history.slice(-8).map((m) => ({
-          role: m.role === "assistant" ? "model" : "user",
-          parts: [{ text: m.content.slice(0, 600) }],
-        })),
-        { role: "user", parts: [{ text }] },
-      ];
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_API_KEY.trim()}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: systemPrompt }] },
-            contents: geminiContents,
-            generationConfig: { responseMimeType: "application/json", temperature: 0.4 },
-          }),
-          signal: controller.signal,
-        }
-      );
-      if (res.ok) {
-        const data = (await res.json()) as any;
-        rawJsonText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      }
-    }
-
-    if (!rawJsonText && env.OPENROUTER_API_KEY?.trim()) {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${env.OPENROUTER_API_KEY.trim()}`,
-        },
-        body: JSON.stringify({
-          model: "meta-llama/llama-3.3-70b-instruct:free",
-          temperature: 0.4,
-          messages: chatMessages,
-        }),
-        signal: controller.signal,
+    const geminiKey = getGeminiKey();
+    if (!rawText && geminiKey) {
+      rawText = await callGeminiProvider({
+        apiKey: geminiKey,
+        systemPrompt,
+        contents: buildAlternatingGeminiContents(history, text),
+        errors,
       });
-      if (res.ok) {
-        const data = (await res.json()) as any;
-        rawJsonText = data?.choices?.[0]?.message?.content || "";
-      }
+      if (rawText) activeProvider = "Google Gemini";
     }
 
-    if (!rawJsonText && (env.OPENAI_API_KEY?.trim() || env.POLLINATIONS_API_KEY?.trim())) {
-      const endpoint = env.OPENAI_API_KEY?.trim()
-        ? "https://api.openai.com/v1/chat/completions"
-        : "https://gen.pollinations.ai/v1/chat/completions";
-      const token = env.OPENAI_API_KEY?.trim() || env.POLLINATIONS_API_KEY!.trim();
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          model: env.OPENAI_API_KEY?.trim() ? "gpt-4o-mini" : "openai",
-          temperature: 0.4,
-          response_format: { type: "json_object" },
-          messages: chatMessages,
-        }),
-        signal: controller.signal,
+    const openrouterKey = cleanEnvKey(env.OPENROUTER_API_KEY);
+    if (!rawText && openrouterKey) {
+      rawText = await callOpenAiCompatibleProvider({
+        providerLabel: "OpenRouter",
+        endpoint: "https://openrouter.ai/api/v1/chat/completions",
+        apiKey: openrouterKey,
+        messages: chatMessages,
+        attempts: [
+          { model: "meta-llama/llama-3.3-70b-instruct:free", jsonMode: false },
+          { model: "google/gemini-2.0-flash-exp:free", jsonMode: false },
+        ],
+        errors,
       });
-      if (res.ok) {
-        const data = (await res.json()) as any;
-        rawJsonText = data?.choices?.[0]?.message?.content || "";
-      }
+      if (rawText) activeProvider = "OpenRouter";
     }
 
-    if (!rawJsonText) return null;
-    const parsed = JSON.parse(stripJsonFences(rawJsonText));
-    const act = parsed?.action || {};
+    const openaiKey = cleanEnvKey(env.OPENAI_API_KEY);
+    const pollKey = cleanEnvKey(env.POLLINATIONS_API_KEY);
+    if (!rawText && (openaiKey || pollKey)) {
+      rawText = await callOpenAiCompatibleProvider({
+        providerLabel: openaiKey ? "OpenAI" : "Pollinations AI",
+        endpoint: openaiKey
+          ? "https://api.openai.com/v1/chat/completions"
+          : "https://gen.pollinations.ai/v1/chat/completions",
+        apiKey: openaiKey || pollKey,
+        messages: chatMessages,
+        attempts: [
+          { model: openaiKey ? "gpt-4o-mini" : "openai", jsonMode: true },
+          { model: openaiKey ? "gpt-4o-mini" : "openai", jsonMode: false },
+        ],
+        errors,
+      });
+      if (rawText) activeProvider = openaiKey ? "OpenAI" : "Pollinations AI";
+    }
+
+    if (!rawText) {
+      const diag = errors[0] || "Empty LLM response";
+      lastLlmDiagnostic = { error: errors.join(" | ").slice(0, 180) || diag, updatedAt: Date.now() };
+      console.error("[AI Brain] Configured LLM failed:", lastLlmDiagnostic.error);
+      return null;
+    }
+
+    const parsed = parseLlmOutputText(rawText);
+    if (!parsed) {
+      lastLlmDiagnostic = { error: "Unparseable empty LLM response", updatedAt: Date.now() };
+      return null;
+    }
+
+    lastLlmDiagnostic = {};
+    const act = parsed.action || {};
 
     let scheduledForIso: string | undefined;
     if (act.scheduledForText) {
@@ -235,8 +469,8 @@ Rules:
     }
 
     return {
-      providerName: provider,
-      reply: String(parsed?.reply || "").trim(),
+      providerName: activeProvider,
+      reply: parsed.reply,
       action: {
         type: act.type || "NONE",
         targetName: act.targetName || undefined,
@@ -253,10 +487,9 @@ Rules:
       },
     };
   } catch (err: any) {
-    console.error("[AI Brain] LLM error:", err?.message || err);
+    lastLlmDiagnostic = { error: String(err?.message || err).slice(0, 150), updatedAt: Date.now() };
+    console.error("[AI Brain] LLM error:", lastLlmDiagnostic.error);
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -427,7 +660,7 @@ export async function thinkWithAiBrain(params: {
 
   // 1. Primary: True Multi-Turn LLM Brain (Groq / Gemini / OpenRouter / OpenAI) when configured
   const llmResult = await callFullLlmBrain(params);
-  if (llmResult && llmResult.reply) {
+  if (llmResult && (llmResult.reply || llmResult.action.type !== "NONE")) {
     return {
       mode: "llm",
       providerName: llmResult.providerName,
@@ -502,11 +735,21 @@ export async function thinkWithAiBrain(params: {
     if (knowledge) {
       conversationalReply = knowledge;
     } else {
-      conversationalReply = pickText(parsed.replyStyle, {
-        en: "I didn't fully catch that one cleanly — try rephrasing, or tell me any topic, calculation, message, call, or reminder you'd like! (Tip: Add a free GROQ_API_KEY or GEMINI_API_KEY on the server for full deep LLM conversations.)",
-        hinglish: "Ye baat main poori tarah samajh nahi paaya — thoda aur clear likh kar ya bol kar bataiye! (Full ChatGPT/Gemini level deep AI ke liye server par free GROQ_API_KEY ya GEMINI_API_KEY bhi add kar sakte hain.)",
-        hi: "मैं इसे पूरी तरह समझ नहीं पाया — कृपया थोड़ा और स्पष्ट लिखें या बोलें!",
-      });
+      const aiStatus = getConfiguredAiProvider();
+      if (aiStatus.configured) {
+        const errHint = aiStatus.lastError ? ` (${aiStatus.lastError})` : "";
+        conversationalReply = pickText(parsed.replyStyle, {
+          en: `${aiStatus.provider} could not answer right now${errHint}. Please check the API key/quota on Render or try again in a moment.`,
+          hinglish: `${aiStatus.provider} se abhi response nahi aa paaya${errHint}. Kripya Render par API key/quota check karein ya thodi der baad dobara poochein.`,
+          hi: `${aiStatus.provider} से अभी जवाब नहीं मिल पाया${errHint}। कृपया सर्वर की API कुंजी या कोटा जाँचें।`,
+        });
+      } else {
+        conversationalReply = pickText(parsed.replyStyle, {
+          en: "I didn't fully catch that one cleanly — try rephrasing, or tell me any topic, calculation, message, call, or reminder you'd like! (Tip: Add GROQ_API_KEY or GEMINI_API_KEY on Render and redeploy for full deep LLM conversations.)",
+          hinglish: "Ye baat main poori tarah samajh nahi paaya — thoda aur clear likh kar ya bol kar bataiye! (Full ChatGPT/Gemini level deep AI ke liye Render par GROQ_API_KEY ya GEMINI_API_KEY add karke Manual Deploy karein.)",
+          hi: "मैं इसे पूरी तरह समझ नहीं पाया — कृपया थोड़ा और स्पष्ट लिखें या बोलें!",
+        });
+      }
     }
   }
 

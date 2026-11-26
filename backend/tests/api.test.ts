@@ -4,6 +4,11 @@ import { AddressInfo } from "node:net";
 import app from "../src/app";
 import { prisma } from "../src/config/prisma";
 import { executeScheduledJob } from "../src/modules/ai/scheduler.worker";
+import {
+  buildAlternatingGeminiContents,
+  cleanEnvKey,
+  parseLlmOutputText,
+} from "../src/modules/ai/ai.brain";
 
 let server: http.Server;
 let baseUrl: string;
@@ -960,5 +965,49 @@ describe("India Chat Backend API Tests", () => {
     await prisma.scheduledAction.deleteMany({ where: { userId: { in: [user1Id, user2Id] } } });
     await prisma.assistantTask.deleteMany({ where: { userId: { in: [user1Id, user2Id] } } });
     await prisma.assistantMessage.deleteMany({ where: { userId: { in: [user1Id, user2Id] } } });
+  });
+
+  it("16. Zust AI Brain - Env key normalization, Gemini alternation, prose/JSON fallback & aiConfig state", async () => {
+    expect(cleanEnvKey('  "gsk_test_123"  ')).toBe("gsk_test_123");
+    expect(cleanEnvKey("  'AIzaTestKey' ")).toBe("AIzaTestKey");
+
+    // Gemini strictly forbids leading 'model' turn or consecutive 'user' turns
+    const geminiContents = buildAlternatingGeminiContents(
+      [
+        { role: "assistant", content: "Old greeting" },
+        { role: "user", content: "First user turn" },
+        { role: "user", content: "Second consecutive user turn" },
+        { role: "assistant", content: "Reply 1" },
+        { role: "user", content: "Follow up" },
+      ],
+      "Current prompt"
+    );
+    expect(geminiContents.map((c) => c.role)).toEqual(["user", "model", "user"]);
+    expect(geminiContents[0].parts[0].text).toContain("First user turn");
+    expect(geminiContents[0].parts[0].text).toContain("Second consecutive user turn");
+    expect(geminiContents[2].parts[0].text).toContain("Follow up");
+    expect(geminiContents[2].parts[0].text).toContain("Current prompt");
+
+    // Fenced JSON, prose-wrapped JSON with unknown action type, and plain prose fallback
+    const fenced = parseLlmOutputText('```json\n{"reply":"Haan bilkul!","action":{"type":"NONE"}}\n```');
+    expect(fenced?.reply).toBe("Haan bilkul!");
+    expect(fenced?.action.type).toBe("NONE");
+
+    const wrapped = parseLlmOutputText('Sure:\n{"reply":"Done","action":{"type":"UNKNOWN_ACTION"}}\nThanks');
+    expect(wrapped?.reply).toBe("Done");
+    expect(wrapped?.action.type).toBe("NONE");
+
+    const prose = parseLlmOutputText("Mujhe lagta hai aaj mausam achha rahega.");
+    expect(prose?.reply).toBe("Mujhe lagta hai aaj mausam achha rahega.");
+    expect(prose?.action.type).toBe("NONE");
+
+    const stateRes = await fetch(`${baseUrl}/api/ai/state`, {
+      headers: { Authorization: `Bearer ${user1Token}` },
+    });
+    expect(stateRes.status).toBe(200);
+    const stateData = await stateRes.json();
+    expect(stateData.aiConfig).toBeDefined();
+    expect(typeof stateData.aiConfig.configured).toBe("boolean");
+    expect(typeof stateData.aiConfig.provider).toBe("string");
   });
 });

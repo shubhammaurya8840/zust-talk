@@ -31,6 +31,7 @@ const envSchema = z.object({
   SMTP_FROM: z.string().optional(),
   // Optional LLM API keys for full ChatGPT/Gemini-level intelligence (no credit card free tiers: Groq / Gemini / OpenRouter)
   GEMINI_API_KEY: z.string().optional(),
+  GOOGLE_API_KEY: z.string().optional(),
   GROQ_API_KEY: z.string().optional(),
   OPENROUTER_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
