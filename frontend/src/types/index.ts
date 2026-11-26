@@ -233,4 +233,8 @@ export interface AssistantState {
   tasks: AssistantTask[];
   scheduledActions: ScheduledAction[];
   recentConversations: AssistantRecentConversation[];
+  aiConfig?: {
+    configured: boolean;
+    provider: string;
+  };
 }

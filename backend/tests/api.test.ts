@@ -910,8 +910,10 @@ describe("India Chat Backend API Tests", () => {
       headers: { Authorization: `Bearer ${user1Token}` },
     });
     expect(cancelRem.status).toBe(200);
+  });
 
-    // 5. Task creation & completion + Unread summary + Chat Search/Summary
+  it("15. Zust AI - Tasks, Unread Summary, Conversation Summary, Hinglish Edge Cases & Math/General AI", async () => {
+    // Task creation
     const taskCmd = await fetch(`${baseUrl}/api/ai/command`, {
       method: "POST",
       headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
@@ -935,6 +937,24 @@ describe("India Chat Backend API Tests", () => {
     });
     expect(summaryCmd.status).toBe(200);
     expect((await summaryCmd.json()).assistantMessage.metadata?.conversationLink?.conversationId).toBeDefined();
+
+    // Smart AI NLU edge cases: time inside message body stays instant SEND_MESSAGE + math question answered directly
+    const lateCmd = await fetch(`${baseUrl}/api/ai/command`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "testuser2 ko bol do main 10 min mein aaunga" }),
+    });
+    expect(lateCmd.status).toBe(200);
+    const lateData = await lateCmd.json();
+    expect(lateData.assistantMessage.metadata?.pendingAction?.type).toBe("SEND_MESSAGE");
+
+    const mathCmd = await fetch(`${baseUrl}/api/ai/command`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user1Token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "What is 25 * 4?" }),
+    });
+    expect(mathCmd.status).toBe(200);
+    expect((await mathCmd.json()).assistantMessage.content).toContain("100");
 
     // Clean up test assistant records for clean shared DB
     await prisma.scheduledAction.deleteMany({ where: { userId: { in: [user1Id, user2Id] } } });

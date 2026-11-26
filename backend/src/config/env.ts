@@ -29,9 +29,12 @@ const envSchema = z.object({
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
   SMTP_FROM: z.string().optional(),
-  // Optional lightweight LLM enhancement (falls back to native Hindi/Hinglish/English NLU if unset)
+  // Optional LLM API keys for full ChatGPT/Gemini-level intelligence (no credit card free tiers: Groq / Gemini / OpenRouter)
   GEMINI_API_KEY: z.string().optional(),
   GROQ_API_KEY: z.string().optional(),
+  OPENROUTER_API_KEY: z.string().optional(),
+  OPENAI_API_KEY: z.string().optional(),
+  POLLINATIONS_API_KEY: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

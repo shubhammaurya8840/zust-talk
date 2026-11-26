@@ -508,40 +508,33 @@ export async function parseUserInstruction(
   }
 
   // 10. Send OR Schedule Message:
-  // Examples:
-  // - "Rahul ko happy birthday wish kar do"
-  // - "Kal 12 baje Amit ko message bhej dena"
-  // - "Send good morning to Rahul"
-  // - "Amit ko likho Kal milte hain"
-  const parsedDt = parseNaturalDateTime(clean, tzOffset);
+  // Distinguish true schedule phrasing ("10 min baad", "in 5 mins", "kal 12 baje")
+  // from message body time mentions ("bol do main 10 min mein aaunga")!
   const looksLikeSend =
-    /\b(wish|send|message|msg|bhej|bhejo|bhejdo|bhejna|bol|bolo|likh|likho|text)\b/i.test(lower) ||
+    /\b(wish|send|message|msg|bhej|bhejo|bhejdo|bhejna|bol|bolo|likh|likho|text|puch|pucho|puchho)\b/i.test(lower) ||
     /^[a-z0-9_ ]{2,25}\s+ko\s+.+\s+(?:kar do|kardo|bol do|boldo|de do|dedo)$/i.test(lower);
 
   if (looksLikeSend) {
     let targetName = "";
     let body = "";
 
-    // Pattern A: "<Name> ko <message> (wish|bhej|bol|likh) ..."
     const hindiPat = clean.match(
-      /(?:^|baje\s+|tomorrow\s+|kal\s+|today\s+|aaj\s+|pm\s+|am\s+|baad\s+)([a-z0-9_ ]{2,28}?)\s+ko\s+(.*)$/i
-    ) || clean.match(/^([a-z0-9_ ]{2,28}?)\s+ko\s+(.*)$/i);
+      /(?:^|baje\s+|tomorrow\s+|kal\s+|today\s+|aaj\s+|pm\s+|am\s+|baad\s+)([a-z0-9_ ]{2,28}?)\s+(?:ko|se)\s+(.*)$/i
+    ) || clean.match(/^([a-z0-9_ ]{2,28}?)\s+(?:ko|se)\s+(.*)$/i);
 
     if (hindiPat) {
-      // Remove any leading time words from captured targetName (e.g. "Kal 12 baje Amit" -> "Amit")
       targetName = cleanTargetName(
         hindiPat[1]
           .replace(/\b(kal|aaj|parso|subah|shaam|raat|dopahar|today|tomorrow|baje|am|pm)\b/gi, " ")
           .replace(/\b\d{1,2}(:\d{2})?\b/g, " ")
       );
       body = hindiPat[2]
-        .replace(/\b(message|msg|txt|text)?\s*(wish\s+kar\s+do|wish\s+kardo|wish\s+karo|wish|bhej\s+dena|bhej\s+do|bhejdo|bhejo|bhejna|bol\s+do|boldo|kar\s+do|kardo|send\s+kar\s+do|likh\s+do)\b[.!]*$/i, "")
-        .replace(/^(ki|likho|bol|saying|that)\s+/i, "")
+        .replace(/\b(message|msg|txt|text)?\s*(wish\s+kar\s+do|wish\s+kardo|wish\s+karo|wish|bhej\s+dena|bhej\s+do|bhejdo|bhejo|bhejna|bol\s+do|boldo|bol\s+dena|kar\s+do|kardo|send\s+kar\s+do|likh\s+do|likh\s+dena|puch\s+lo|puchho)\b[.!]*$/i, "")
+        .replace(/^(ki|likho|bol\s+do|bol\s+dena|bol|saying|that|pucho|puchho)\s+/i, "")
         .trim();
     } else {
-      // Pattern B: English "Send <msg> to <Name>" or "Message <Name> saying <msg>"
       const engSend = clean.match(
-        /\b(?:send|text|message|wish)\s+(?:a\s+message\s+)?(?:to\s+)?([a-z0-9_]{2,25})(?:\s+(?:saying|that|:)\s*|\s+)(.+)$/i
+        /\b(?:send|text|message|wish|tell|ask)\s+(?:a\s+message\s+)?(?:to\s+)?([a-z0-9_]{2,25})(?:\s+(?:saying|that|to|:)\s*|\s+)(.+)$/i
       );
       const engTo = clean.match(/\b(?:send|wish)\s+["']?(.+?)["']?\s+to\s+([a-z0-9_ ]{2,28})$/i);
       if (engTo) {
@@ -555,7 +548,6 @@ export async function parseUserInstruction(
       }
     }
 
-    // Group messaging: "Cricket group mein likho hello"
     if (!targetName) {
       const grpSend = clean.match(/([a-z0-9_ ]{2,30}?)\s+group\s+(?:mein|me|in)\s+(?:likho|bhejo|send|say|message)\s*[:\-]?\s*(.*)$/i);
       if (grpSend) {
@@ -564,10 +556,17 @@ export async function parseUserInstruction(
       }
     }
 
-    // Clean leftover filler if user only said "message bhej dena" without content
     if (/^(ek\s+)?(message|msg|hello)?\s*$/i.test(body) && /^message|msg$/i.test(body)) {
       body = "";
     }
+
+    // Only parse schedule time from text BEFORE body OR explicit scheduling words ("baad", "later", "kal", "tomorrow", "schedule", "at X am/pm", "X baje") OUTSIDE the message body!
+    const textOutsideBody = body
+      ? clean.replace(body, " ").trim()
+      : clean;
+    const explicitSchedPhrase =
+      /\b(kal|parso|tomorrow|schedule|later|baad)\b|\b\d{1,2}(:\d{2})?\s*(am|pm|baje)\b/i.test(textOutsideBody);
+    const parsedDt = explicitSchedPhrase ? parseNaturalDateTime(textOutsideBody, tzOffset) : null;
 
     if (targetName) {
       return {
@@ -584,6 +583,7 @@ export async function parseUserInstruction(
   // 11. Optional LLM enhancement for tricky/unmatched phrases
   const llm = await tryLlmIntentParse(rawText, hasPending);
   if (llm && llm.intent) {
+    const parsedDt = parseNaturalDateTime(clean, tzOffset);
     return {
       intent: llm.intent,
       replyStyle: style,

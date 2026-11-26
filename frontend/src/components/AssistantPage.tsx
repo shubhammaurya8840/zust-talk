@@ -45,12 +45,12 @@ interface AssistantPageProps {
 }
 
 const EXAMPLE_PROMPTS = [
+  "Ek funny joke sunao Hindi me",
+  "Taj Mahal kya hai?",
   "Rahul ko happy birthday wish kar do",
   "Kal 12 baje Amit ko hello bhej dena",
   "Mere unread messages ka summary batao",
-  "Mujhe kal subah 9 baje yaad dila dena",
   "Cricket ka group bana do",
-  "Group mein poll create karo",
 ];
 
 function toDatetimeLocalValue(iso?: string | null): string {
@@ -72,6 +72,7 @@ export const AssistantPage: React.FC<AssistantPageProps> = ({
   const [tasks, setTasks] = useState<AssistantTask[]>([]);
   const [scheduled, setScheduled] = useState<ScheduledAction[]>([]);
   const [recentConvs, setRecentConvs] = useState<AssistantRecentConversation[]>([]);
+  const [aiProvider, setAiProvider] = useState<string>("Zust Smart AI");
   const [loading, setLoading] = useState(true);
 
   const [inputText, setInputText] = useState("");
@@ -122,11 +123,13 @@ export const AssistantPage: React.FC<AssistantPageProps> = ({
     tasks: AssistantTask[];
     scheduledActions: ScheduledAction[];
     recentConversations: AssistantRecentConversation[];
+    aiConfig?: { configured: boolean; provider: string };
   }) => {
     setMessages(s.messages || []);
     setTasks(s.tasks || []);
     setScheduled(s.scheduledActions || []);
     setRecentConvs(s.recentConversations || []);
+    if (s.aiConfig?.provider) setAiProvider(s.aiConfig.provider);
   };
 
   const loadState = useCallback(async () => {
@@ -319,15 +322,15 @@ export const AssistantPage: React.FC<AssistantPageProps> = ({
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <div className="w-9 h-9 rounded-2xl bg-gradient-to-tr from-emerald-500 to-teal-500 text-white flex items-center justify-center shadow-sm shrink-0">
+          <div className="w-9 h-9 rounded-2xl bg-gradient-to-tr from-indigo-600 via-violet-600 to-cyan-500 text-white flex items-center justify-center shadow-sm shrink-0">
             <Bot className="w-5 h-5" />
           </div>
           <div className="min-w-0">
             <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100 truncate">
-              Personal AI Assistant
+              Zust AI
             </h2>
             <p className="text-[11px] text-emerald-600 dark:text-emerald-400 truncate font-medium">
-              Voice & Text • Hindi, Hinglish, English
+              {aiProvider} • Ask anything or automate chats
             </p>
           </div>
         </div>

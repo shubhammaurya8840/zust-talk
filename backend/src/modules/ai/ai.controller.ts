@@ -6,7 +6,8 @@ import { HttpError } from "../../utils/http-error";
 import { io, isUserOnline } from "../../sockets/socket";
 import { translateAny } from "../../utils/translator";
 import { createPollMessage, pollInclude } from "../polls/polls.controller";
-import { ParsedIntent, parseUserInstruction, pickText } from "./ai.nlu";
+import { ParsedIntent, pickText } from "./ai.nlu";
+import { getConfiguredAiProvider, thinkWithAiBrain } from "./ai.brain";
 
 interface CandidateTarget {
   kind: "USER" | "GROUP";
@@ -224,7 +225,13 @@ async function fetchAssistantState(userId: string) {
     };
   });
 
-  return { messages, tasks, scheduledActions, recentConversations };
+  return {
+    messages,
+    tasks,
+    scheduledActions,
+    recentConversations,
+    aiConfig: getConfiguredAiProvider(),
+  };
 }
 
 export async function getState(req: Request, res: Response) {
@@ -616,13 +623,19 @@ export async function handleCommand(req: Request, res: Response) {
 
   if (!text) throw new HttpError(400, "Instruction text is required");
 
-  // Check if there is an active unconfirmed pendingAction from last turn
-  const recentMsgs = await prisma.assistantMessage.findMany({
-    where: { userId },
-    orderBy: { createdAt: "desc" },
-    take: 5,
-  });
-  const latestPendingMsg = recentMsgs.find((m) => {
+  // Check recent messages & pending unconfirmed action for multi-turn intelligence
+  const [meUser, recentMsgsDesc, userContacts, userGroups] = await Promise.all([
+    prisma.user.findUnique({ where: { id: userId }, select: { displayName: true, username: true } }),
+    prisma.assistantMessage.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+    }),
+    getUserContacts(userId),
+    getUserGroups(userId),
+  ]);
+
+  const latestPendingMsg = recentMsgsDesc.find((m) => {
     const meta = m.metadata as any;
     return m.role === "assistant" && meta?.pendingAction?.status === "PENDING";
   });
@@ -631,10 +644,42 @@ export async function handleCommand(req: Request, res: Response) {
     data: { userId, role: "user", content: text },
   });
 
-  const parsed = await parseUserInstruction(text, {
+  const pendingMeta = latestPendingMsg ? ((latestPendingMsg.metadata as any)?.pendingAction || undefined) : undefined;
+  const pendingSummary = pendingMeta
+    ? `${pendingMeta.type} for ${pendingMeta.targetLabel || pendingMeta.groupTitle || "user"} (body="${pendingMeta.body || pendingMeta.reminderText || pendingMeta.question || ""}")`
+    : undefined;
+
+  const brain = await thinkWithAiBrain({
+    text,
+    userName: meUser?.displayName || meUser?.username || "Friend",
+    contacts: userContacts.map((c) => ({
+      label: c.label,
+      username: (c.sublabel || "").replace(/^@/, ""),
+      isOnline: Boolean(c.isOnline),
+    })),
+    groups: userGroups.map((g) => ({ label: g.label })),
+    history: [...recentMsgsDesc].reverse().map((m) => ({ role: m.role, content: m.content })),
+    pendingSummary,
     tzOffsetMinutes,
-    hasPending: Boolean(latestPendingMsg),
   });
+
+  const parsed: ParsedIntent = {
+    intent: brain.action.type === "NONE" ? "GENERAL_CHAT" : brain.action.type,
+    replyStyle: brain.replyStyle,
+    replyIso: brain.replyIso,
+    targetName: brain.action.targetName,
+    messageBody: brain.action.messageBody,
+    scheduledForIso: brain.action.scheduledForIso,
+    isVideoCall: brain.action.isVideoCall,
+    groupTitle: brain.action.groupTitle,
+    memberNames: brain.action.memberNames,
+    pollQuestion: brain.action.pollQuestion,
+    pollOptions: brain.action.pollOptions,
+    reminderText: brain.action.reminderText,
+    taskTitle: brain.action.taskTitle,
+    searchQuery: brain.action.searchQuery,
+    chatReply: brain.reply || undefined,
+  };
 
   let replyContent = "";
   let metadata: Record<string, any> = {};
@@ -922,17 +967,20 @@ export async function handleCommand(req: Request, res: Response) {
         hi: `${uniqueTarget.label} को भेजने के लिए संदेश लिखें और समय कन्फर्म करें:`,
       });
     } else {
-      replyContent = isSchedule
-        ? await formatLocalized(parsed, {
-            en: `Confirm scheduling message to ${uniqueTarget.label}: "${msgBody}"?`,
-            hinglish: `${uniqueTarget.label} ko scheduled message "${msgBody}" bhejne ki confirmation karein:`,
-            hi: `${uniqueTarget.label} को यह शेड्यूल संदेश "${msgBody}" भेजने की पुष्टि करें:`,
-          })
-        : await formatLocalized(parsed, {
-            en: `Ready to send to ${uniqueTarget.label}: "${msgBody}" — Confirm?`,
-            hinglish: `${uniqueTarget.label} ko "${msgBody}" bhej doon? Confirm karein:`,
-            hi: `क्या मैं ${uniqueTarget.label} को "${msgBody}" भेज दूँ?`,
-          });
+      replyContent =
+        brain.mode === "llm" && parsed.chatReply
+          ? parsed.chatReply
+          : isSchedule
+          ? await formatLocalized(parsed, {
+              en: `Confirm scheduling message to ${uniqueTarget.label}: "${msgBody}"?`,
+              hinglish: `${uniqueTarget.label} ko scheduled message "${msgBody}" bhejne ki confirmation karein:`,
+              hi: `${uniqueTarget.label} को यह शेड्यूल संदेश "${msgBody}" भेजने की पुष्टि करें:`,
+            })
+          : await formatLocalized(parsed, {
+              en: `Ready to send to ${uniqueTarget.label}: "${msgBody}" — Confirm?`,
+              hinglish: `${uniqueTarget.label} ko "${msgBody}" bhej doon? Confirm karein:`,
+              hi: `क्या मैं ${uniqueTarget.label} को "${msgBody}" भेज दूँ?`,
+            });
     }
 
     metadata = {

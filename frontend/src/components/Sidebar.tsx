@@ -162,22 +162,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <QrCode className="w-4 h-4" />
           </button>
 
-          {onOpenAssistant && (
-            <button
-              type="button"
-              onClick={onOpenAssistant}
-              title="Personal AI Assistant"
-              aria-label="Open Personal AI Assistant"
-              className={`p-2 rounded-xl transition-all ${
-                isAssistantActive
-                  ? "bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-500/30"
-                  : "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/50"
-              }`}
-            >
-              <Bot className="w-4 h-4" />
-            </button>
-          )}
-
           {onOpenRadar && (
             <button
               type="button"
@@ -343,7 +327,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Conversations List */}
-      <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/80 overscroll-contain pb-24">
+      <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/80 overscroll-contain pb-40">
         {filtered.length === 0 ? (
           <div className="p-8 text-center text-slate-400 flex flex-col items-center justify-center h-full">
             <Users className="w-10 h-10 text-slate-300 dark:text-slate-700 mb-2" />
@@ -448,6 +432,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
           })
         )}
       </div>
+
+      {/* Floating Round AI Assistant Button directly above Search New Friend FAB */}
+      {onOpenAssistant && (
+        <button
+          type="button"
+          onClick={onOpenAssistant}
+          title="Zust AI (Full Assistant)"
+          aria-label="Open Zust AI"
+          className={`fixed md:absolute bottom-24 right-5 z-30 w-12 h-12 rounded-full flex items-center justify-center shadow-xl transition-all hover:scale-105 active:scale-95 border-2 ${
+            isAssistantActive
+              ? "bg-slate-900 dark:bg-indigo-500 text-white border-indigo-400 ring-4 ring-indigo-500/30"
+              : "bg-gradient-to-tr from-indigo-600 via-violet-600 to-cyan-500 text-white border-white/90 dark:border-slate-800 shadow-indigo-600/30"
+          }`}
+        >
+          <Bot className="w-5 h-5" />
+        </button>
+      )}
 
       {/* Floating Round Search Everyone & Start New Chat Button at Bottom-Right */}
       <button
